@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AelionBot Agent 架构解读</title>
+<style>
+:root{--bg:#0f1218;--panel:#161b24;--panel2:#1c2330;--line:#2a3344;--text:#d7dde8;--mute:#8a96aa;--acc:#6aa8ff;--acc2:#7ee0b5;--warn:#ffb86b;--bad:#ff7a90;--code:#0b0e13}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.75 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+a{color:var(--acc);text-decoration:none}
+nav{position:fixed;top:0;left:0;bottom:0;width:240px;padding:28px 18px;border-right:1px solid var(--line);background:#0c0f14;overflow:auto}
+nav .brand{font-weight:700;font-size:17px;margin-bottom:4px}
+nav .sub{color:var(--mute);font-size:12px;margin-bottom:22px}
+nav a{display:block;padding:6px 10px;border-radius:6px;color:var(--mute);font-size:14px}
+nav a:hover{background:var(--panel);color:var(--text)}
+main{margin-left:240px;padding:40px 56px 120px;max-width:1180px}
+h1{font-size:30px;margin:0 0 8px}
+h2{font-size:23px;margin:64px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
+h2 .no{color:var(--acc);margin-right:10px;font-family:Consolas,monospace}
+h3{font-size:17px;margin:28px 0 8px;color:#e9eef7}
+p{margin:8px 0}
+.lead{color:var(--mute);font-size:16px}
+code{font-family:Consolas,"Cascadia Code",monospace;font-size:13px;background:var(--code);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#ffd58a}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow:auto;font:13px/1.6 Consolas,monospace;color:#c9d4e5}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+.card h4{margin:0 0 6px;font-size:15px;color:var(--acc2)}
+.card p,.card li{font-size:14px;color:#c3cbd8}
+.card ul{margin:4px 0;padding-left:18px}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mute);margin-right:6px}
+.tag.a{color:var(--acc);border-color:#2f4a73}.tag.g{color:var(--acc2);border-color:#2a5a48}.tag.w{color:var(--warn);border-color:#6a4a25}.tag.r{color:var(--bad);border-color:#6a2a38}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--panel2);color:#e9eef7;font-weight:600}
+td{background:var(--panel)}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:16px 0}
+.flow .s{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;min-width:120px;max-width:200px}
+.flow .s b{display:block;color:var(--acc);font-size:12px;font-family:Consolas,monospace}
+.flow .ar{display:flex;align-items:center;color:var(--mute);padding:0 6px;font-size:18px}
+.stack{display:flex;flex-direction:column;gap:6px;margin:14px 0}
+.stack div{border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-size:13px;background:var(--panel)}
+.stack .k{color:var(--acc2);font-family:Consolas,monospace;margin-right:8px}
+.stack .stable{border-left:4px solid var(--acc2)}
+.stack .semi{border-left:4px solid var(--acc)}
+.stack .dyn{border-left:4px solid var(--warn)}
+.loop{border:1px dashed #3a4a66;border-radius:12px;padding:14px;margin:16px 0;position:relative}
+.loop:before{content:"for (iteration = 0; ; iteration++)";position:absolute;top:-11px;left:16px;background:var(--bg);padding:0 8px;color:var(--acc);font:12px Consolas,monospace}
+.note{border-left:3px solid var(--warn);background:#1d1a14;padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:14px;color:#e8d9bf}
+.ok{border-left-color:var(--acc2);background:#122019;color:#c9eedb}
+.file{color:var(--mute);font-size:12px;font-family:Consolas,monospace}
+.hero{background:linear-gradient(135deg,#17243b,#121820 60%);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:10px}
+@media(max-width:1000px){nav{display:none}main{margin-left:0;padding:24px}.g3,.g4{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand">AelionBot</div>
+  <div class="sub">Agent Runtime 架构解读</div>
+  <a href="#overview">0. 全局视图</a>
+  <a href="#loop">1. Agent Loop 设计</a>
+  <a href="#context">2. 上下文策略</a>
+  <a href="#tools">3. 工具模块设计</a>
+  <a href="#session">4. 会话管理</a>
+  <a href="#multi">5. 多 Agent 协作</a>
+  <a href="#obs">6. 可观测性</a>
+  <a href="#resume">7. 长任务断点续跑</a>
+  <a href="#principles">8. 设计原则小结</a>
+</nav>
+<main>
+
+<div class="hero">
+  <h1>AelionBot Agent 运行时架构解读</h1>
+  <p class="lead">本文基于仓库源码（<code>electron/core/</code>），讲解 Bot 执行循环、上下文管理与压缩、工具体系、会话、多 Agent 协作、可观测性与断点续跑这几部分的设计。文中给出的数值都是代码里的默认值或计算公式。</p>
+  <p><span class="tag a">Electron 主进程</span><span class="tag g">TypeScript</span><span class="tag w">SQLite + JSON 状态</span><span class="tag">单一 Harness 引擎</span></p>
+</div>
+
+<!-- ================= 0 ================= -->
+<h2 id="overview"><span class="no">00</span>全局视图</h2>
+<p>所有 Bot（私聊、群聊、Bot 间委托、定时任务、设计任务）都通过 <code>BotRuntime</code> 这一个入口派发，最后由 <code>Harness.run()</code> 执行。v0.42 之后设计任务也走同一个 Harness，<code>engine === 'designer'</code> 只用来拒绝续跑旧引擎的任务。</p>
+<div class="flow">
+  <div class="s"><b>入口</b>私聊 / 群聊 / Peer / 定时 / 连接器(企微等)</div><div class="ar">→</div>
+  <div class="s"><b>BotRuntime</b>按 lane 判忙、派发，拒绝旧 designer 续跑</div><div class="ar">→</div>
+  <div class="s"><b>Harness.run()</b>执行循环、完成门禁、工具调度</div><div class="ar">→</div>
+  <div class="s"><b>ContextEngine</b>组装请求、裁剪、压缩</div><div class="ar">→</div>
+  <div class="s"><b>ModelClient</b>多协议流式请求、重试、备用模型</div>
+</div>
+<div class="grid g4">
+  <div class="card"><h4>agent/</h4><p>harness、execution-ledger、work-items、runtime-policy、interactions、prompts</p></div>
+  <div class="card"><h4>context/</h4><p>context-engine、context-budget、context-view、context-pruning、prompt-cache、token 校准</p></div>
+  <div class="card"><h4>tools/ + agent/tools/</h4><p>定义 definitions、实现 handlers、并发、输出封装、终端/进程/Python 会话</p></div>
+  <div class="card"><h4>peer/ group/ memory/</h4><p>Bot 私聊委托、群聊协议 V2、Laya 分拣、记忆与后台学习</p></div>
+</div>
+
+<!-- ================= 1 ================= -->
+<h2 id="loop"><span class="no">01</span>Agent Loop 设计</h2>
+<p class="file">electron/core/agent/harness.ts · Harness.run() / finishRun()</p>
+<p>Harness 的循环就是一个 <code>for(;;)</code>：每一轮准备上下文、调一次模型，如果模型返回了工具调用，就执行这些工具，把结果写回历史，再进入下一轮。模型不再调用工具时，要先通过一组完成门禁才算结束。它和普通 ReAct 循环不一样的地方是，模型说“我做完了”不算数，程序要按真实状态核对一遍。</p>
+
+<h3>1.1 启动阶段（进入循环前）</h3>
+<div class="grid g3">
+  <div class="card"><h4>抢占 lane</h4><p><code>runLane(botId, sessionId)</code> 加锁，同一 lane 同时只能有一个 run。这一步之前没有任何 await，两次并发启动不会同时通过检查。</p></div>
+  <div class="card"><h4>创建 RunRecord</h4><p>记录 <code>status=running</code>、workspaceDir、来源（peerOrigin / groupOrigin）、<code>supersedesRunId</code>、<code>resumedFromRunId</code>，然后立即落盘。</p></div>
+  <div class="card"><h4>预算定时器</h4><p><code>maxMinutes</code> 到期后 abort，错误信息是“达到本次执行时间预算”，执行记录保留。</p></div>
+  <div class="card"><h4>选择历史槽</h4><p>根据来源确定 <code>contextKey</code>：主会话、工作会话、Peer 私有会话或群工作区（见第 4 节）。</p></div>
+  <div class="card"><h4>组装系统层</h4><p>身份/SOUL + <code>harnessInstructions()</code>，提示词只提到本轮真正提供的能力（computer、host、design、peers…）。</p></div>
+  <div class="card"><h4>WorkItems.begin</h4><p>识别 <code>/plan</code>、<code>/goal</code> 命令，或者接上之前的计划/目标；状态为 planning 时只开放只读工具。</p></div>
+</div>
+
+<h3>1.2 单轮迭代</h3>
+<div class="loop">
+<div class="flow">
+  <div class="s"><b>① 收集输入</b>消费用户对 request_user_input 的回答；群聊调用 groups.receive 拉取新收件</div><div class="ar">→</div>
+  <div class="s"><b>② 预算检查</b>RunPolicy.check：maxTurns / maxMinutes / maxTokens，超出时抛出 AppError</div><div class="ar">→</div>
+  <div class="s"><b>③ checkpoint</b>有新私聊输入或群事件时抛出 InputUpdated / GroupUpdated，主动让出</div><div class="ar">→</div>
+  <div class="s"><b>④ 选工具</b>turnTools 按能力、场景、计划状态过滤，MCP 工具每个 run 只取一次</div><div class="ar">→</div>
+  <div class="s"><b>⑤ 准备上下文</b>ContextEngine.prepare，必要时压缩</div><div class="ar">→</div>
+  <div class="s"><b>⑥ 推理</b>model.complete 流式输出，推理过程单独展示</div><div class="ar">→</div>
+  <div class="s"><b>⑦ 分支</b>没有工具调用：进入完成门禁；有工具调用：执行工具批次</div>
+</div>
+</div>
+
+<h3>1.3 推理失败的就地恢复</h3>
+<table>
+<tr><th>异常</th><th>处理</th></tr>
+<tr><td><code>ContentPolicyError</code></td><td><code>quarantinePolicyContext</code> 隔离触发审核的历史片段，用 <code>force</code> 重新 prepare 上下文后重试一次</td></tr>
+<tr><td><code>ContextOverflowError</code></td><td>服务商报上下文溢出时强制压缩后重试；压缩后请求和原来一模一样就直接抛出，避免死循环</td></tr>
+<tr><td>模型 5xx / 空闲超时</td><td>ModelClient 内部按 <code>modelRetries</code> 退避重试，配置了 <code>fallbackModel</code> 时切换一次备用模型</td></tr>
+<tr><td>新输入打断</td><td><code>runtime.inference.abort(new InputUpdated())</code> 只中断这次推理，已执行的工具结果都保留</td></tr>
+</table>
+
+<h3>1.4 完成门禁（模型没有调用工具时）</h3>
+<p>模型想直接回答时，Harness 按下面的顺序逐项检查。任何一项不满足，就往历史里插一条 system 续写指令（<code>prompts/continuations.ts</code>），然后 <code>continue</code> 回到循环：</p>
+<table>
+<tr><th>#</th><th>检查项</th><th>未通过时</th></tr>
+<tr><td>1</td><td>有待用户回答的问题</td><td><code>waitQuestions</code> 挂起等待，不消耗模型调用</td></tr>
+<tr><td>2</td><td>任务终端还在运行</td><td><code>runningTerminals</code>，要求读取或结束终端</td></tr>
+<tr><td>3</td><td>接受了委托但没交回执</td><td><code>missingDelegationReceipt</code></td></tr>
+<tr><td>4</td><td>Python 会话 / 后台进程未结束</td><td><code>unfinishedPython</code> / <code>unfinishedProcesses</code></td></tr>
+<tr><td>5</td><td>计划里还有 pending / working 步骤</td><td><code>PLAN_INCOMPLETE</code>，连续 3 次提前回答就停止（群聊里标记为受阻）</td></tr>
+<tr><td>6</td><td>planning 状态下还没保存计划，或 goal 还在进行</td><td><code>PLAN_NOT_SAVED</code> / <code>GOAL_INCOMPLETE</code></td></tr>
+<tr><td>7</td><td>受托写入的记忆还没真正保存</td><td><code>MEMORY_NOT_SAVED</code>，最多提醒 2 次，之后报错</td></tr>
+<tr><td>8</td><td>执行账本里有未解决的失败</td><td><code>unresolvedFailures</code>，最多 2 次，之后报“执行仍有未解决错误”</td></tr>
+<tr><td>9</td><td>群聊：发布前复核、被点名必须回复</td><td><code>groups.beforeFinal</code> / <code>mentionCheckFailed</code></td></tr>
+<tr><td>10</td><td>表情事件要求回复却选择了静默</td><td><code>REACTION_NEEDS_REPLY</code></td></tr>
+</table>
+<div class="note ok">计划步骤要标记为 <code>done</code>，必须引用本任务里真实成功的 <code>executionId</code> 作为证据（<code>RunPolicy.update</code> 会校验），所以模型没法凭空宣称“已完成”。</div>
+
+<h3>1.5 工具批次与防死循环</h3>
+<div class="grid g3">
+  <div class="card"><h4>意图先落盘</h4><p>每个调用在执行前先 <code>ledger.begin()</code>，并写入 <code>journal('tool.intent')</code>，然后才真正执行。</p></div>
+  <div class="card"><h4>并发执行</h4><p><code>runConcurrentTools</code>：读类工具并行，独占类工具串行，写同一路径时加路径锁。</p></div>
+  <div class="card"><h4>拒绝即停止</h4><p>用户拒绝授权（<code>InteractionDenied</code>）后，本批剩下的调用都标为“未执行”；<code>stopTask</code> 会结束整个 run。</p></div>
+  <div class="card"><h4>同一失败 3 次</h4><p>按 <code>execution.targetKey</code> 统计，同一目标连续失败 3 次就暂停，避免无效重试。</p></div>
+  <div class="card"><h4>群聊停滞检测</h4><p>工具结果去掉时间戳、ID 后做指纹，连续 3 批没有新的成功结果，就把任务标记为受阻。</p></div>
+  <div class="card"><h4>finishRun 收尾</h4><p>停止残留的进程、终端、Python 会话，修复工具配对（repairHistory），收集产物，触发后台学习。</p></div>
+</div>
+
+<!-- ================= 2 ================= -->
+<h2 id="context"><span class="no">02</span>上下文策略：组装、预算、裁剪、压缩</h2>
+<p class="file">electron/core/context/context-engine.ts · context-budget.ts · context-view.ts · context-pruning.ts</p>
+<p>原始历史（<code>conversations[contextKey]</code>）只追加、不修改，始终是权威记录。发给模型的是在它基础上算出来的“视图”：由 epoch（压缩代次）、<code>through</code>（前面多少条已并入摘要）、pruning（工具输出裁剪）和 view（插入点记录）共同决定。这些状态都存在 SQLite 里（<code>context_heads</code> / <code>context_state</code> / <code>context_pruning</code>）。</p>
+
+<h3>2.1 请求的分层结构（按稳定程度排列，为了命中 prompt cache）</h3>
+<div class="stack">
+  <div class="stable"><span class="k">system</span>身份 + SOUL + Harness 指令（一个 run 内不变）</div>
+  <div class="stable"><span class="k">tools</span>工具 schema，顺序固定（<code>TOOLS</code> 只能追加，不能调换顺序）；MCP 工具每个 run 取一次</div>
+  <div class="semi"><span class="k">prefixContext</span>记忆快照 · 本机环境/工作区约定 · 技能目录 · MCP 服务列表 · 设计任务前缀</div>
+  <div class="semi"><span class="k">summary</span>“历史压缩摘要 + 精确记录锚点”（resultId / path / sha256 / commit）</div>
+  <div class="semi"><span class="k">loadedSkills / restoredFiles</span>本会话读过的技能；压缩时重新读取的最近文件（最多 5 个）</div>
+  <div class="semi"><span class="k">history view</span>从 <code>through</code> 开始的历史，经过工具输出裁剪和图像归档</div>
+  <div class="dyn"><span class="k">controls</span>taskFrame（计划/目标/设计状态）+ dynamicContext（turnContext：请求锚点、时钟、@ 信息、群事件）</div>
+</div>
+<div class="note"><b>只追加的 ContextView</b>：参考资料或控制信息变化时，不会回头改前缀，而是在当前历史位置插入一条“参考资料已更新…”事件。这样之前已经付费缓存的前缀依然有效。插到对话中间的 assistant 参考消息会改成 system 角色，因为 DeepSeek 这类 thinking 模型会要求 assistant 消息带 reasoning。</div>
+
+<h3>2.2 预算公式 <code>contextBudget(capacity, compactPercent=85)</code></h3>
+<pre>output   = capacity ≥ 160k ? 8192 : clamp(capacity*0.2, 1024, 4096)    // 输出预留
+safety   = clamp(capacity*0.08, 768, 8192)                               // 安全余量
+input    = capacity - output - safety                                    // 输入上限
+trigger  = min(input - headroom, capacity * compactPercent%)             // 触发压缩的阈值
+tail     = max(1200, min(input*0.3, max(24000, input*0.12)))             // 原样保留的尾部
+summary  = max(min(3000, max(600, input*0.12)), min(8000, input*0.03))   // 摘要目标长度
+compaction = max(output, min(32000, summary*2+2048, capacity*0.25))      // 压缩调用的输出额度</pre>
+<p>Token 计数用 <code>o200k_base</code>，在 worker 线程里预先计数并缓存（<code>primeTokenCounts</code>），再用服务商返回的真实 usage 校准系数：偏低时马上调高，偏高时要多次观测后才慢慢调低，并且不会低于未校准的值。图像按 768px 分块、每块 1024 token 预留。</p>
+
+<h3>2.3 prepare() 的降级流水线</h3>
+<div class="flow">
+  <div class="s"><b>1 图像归档</b>截图超过 32 张（设计任务 8 张）后，只保留最近几张</div><div class="ar">→</div>
+  <div class="s"><b>2 工具输出裁剪</b>超过 trigger 时，把保护尾部之外大于 350 token 的输出换成摘要（resultDigest）</div><div class="ar">→</div>
+  <div class="s"><b>3 激进裁剪</b>仍超过 input 时，连最新的已归档结果也只留引用</div><div class="ar">→</div>
+  <div class="s"><b>4 必要项检查</b>system + 参考 + 控制本身就超窗时，抛出 ContextCapacityError</div><div class="ar">→</div>
+  <div class="s"><b>5 压缩循环</b>最多 8 轮，把 tail 之前的记录并入摘要</div>
+</div>
+
+<h3>2.4 压缩（Compaction）细节</h3>
+<div class="grid g2">
+  <div class="card"><h4>切分点</h4><ul><li><code>tailBoundary</code> 以“交换”（assistant+tool_calls+tool 结果）为单位，至少保留 2 个完整交换</li><li>切分点不能落在没配对完的工具调用中间</li><li>摘要输入放不下时按交换对半缩小范围</li></ul></div>
+  <div class="card"><h4>复用缓存</h4><ul><li>优先在刚组好的请求后面追加一条“压缩请求”，system、tools、前缀都相同，大部分输入能命中缓存</li><li>模型在这个请求里还想调工具时，退回到不带工具的序列化请求</li></ul></div>
+  <div class="card"><h4>结构化摘要</h4><pre style="margin:4px 0">{"goal","userMessages","constraints","files",
+ "done","pending","decisions","failures","next"}</pre><p>done 只写有工具结果证实的操作，计划和实证分开写；JSON 不合法时调用一次修复，然后在本地截短到合适长度。</p></div>
+  <div class="card"><h4>提交 epoch</h4><ul><li>提交前用 hash 校验被压缩的那段原始历史没有变化</li><li>压缩后没省下至少 100 token 就回滚</li><li>恢复的文件不会再引发新一轮压缩</li></ul></div>
+  <div class="card"><h4>失败降级</h4><ul><li>摘要模型失败后冷却 60 秒</li><li>仍然超窗时用 <code>localSummary</code> 按规则机械摘要，任务继续跑</li></ul></div>
+  <div class="card"><h4>手动压缩</h4><ul><li><code>compactContext(focus)</code>：Bot 空闲时立刻执行，忙时排到下一次请求前</li><li>focus 指定要优先保留的细节</li></ul></div>
+</div>
+
+<h3>2.5 工具结果的“外置 + 回查”</h3>
+<p>每个工具结果的完整内容都写到 <code>results/&lt;resultId&gt;.json</code>，上下文里只放一个信封：<code>{executionId, resultId, truncated, readWith:'read_result', result}</code>。内联预算是 <code>toolResultLimit = clamp(context*0.1, 6000, 24000)</code> 字符。超出时保留 JSON 结构和所有标量字段（exitCode、sha256、eof…），只从中间截短长字符串；<code>stdout/stderr/log</code> 这类字段多保留尾部（头尾 4:6），因为报错通常在最后。之后模型可以用 <code>read_result</code> 分页读取原文。</p>
+<div class="note">被压缩掉的内容不会丢：原文还在，模型可以用 <code>history_search</code> / <code>history_read</code> / <code>read_result</code> 按锚点找回，这也是摘要里要带“精确记录锚点”的原因。</div>
+
+<!-- ================= 3 ================= -->
+<h2 id="tools"><span class="no">03</span>工具模块设计</h2>
+<p class="file">agent/tools/definitions · agent/tools/handlers · tools/*.ts</p>
+
+<h3>3.1 定义与实现分离</h3>
+<div class="grid g3">
+  <div class="card"><h4>definitions/</h4><p>只放 JSON Schema 和描述，原样发给模型。<code>TOOLS</code> 数组顺序是请求的一部分，影响 prompt cache，新工具只能往后加。</p></div>
+  <div class="card"><h4>handlers/</h4><p><code>TOOL_HANDLERS</code> 按名字精确匹配；<code>PREFIX_HANDLERS</code> 按命名空间匹配（scheduled_ / group_ / mcp / design_）；<code>mcp__*</code> 是 MCP 原生工具。</p></div>
+  <div class="card"><h4>ToolDeps 注入</h4><p>handler 拿到的是 <code>ToolContext</code>（bot、args、signal、run、workspace、deps），不直接依赖 Harness，方便测试。</p></div>
+</div>
+
+<h3>3.2 每轮动态选工具：turnTools()</h3>
+<table>
+<tr><th>维度</th><th>规则举例</th></tr>
+<tr><td>能力开关</td><td>没有 VM/Host 时去掉文件和命令工具；没开桌面控制时去掉 <code>host_computer</code>；没有 scheduler 时去掉 <code>scheduled_*</code></td></tr>
+<tr><td>场景</td><td>群聊里禁止 memory / skill_save / 委托；Peer 私有会话只有 <code>privateTools</code>；headless 模式隐藏需要人工交互的工具</td></tr>
+<tr><td>计划状态</td><td>planning 时只给 <code>PLANNING_TOOLS</code>（只读），<code>tools_batch</code> 的 enum 也收窄成只读工具</td></tr>
+<tr><td>小窗口模型</td><td>上下文小于 32k 时只发 <code>COMPACT_TOOLS</code>，其余工具通过 <code>tool_search</code> 找到，再用 <code>code_exec</code> 里的 <code>tools.xxx()</code> 调用</td></tr>
+<tr><td>MCP 预算</td><td>最多 <code>min(60, 120-内置数)</code> 个函数，schema 占用不超过输入预算的 10%（上限 12k token），其余服务只列在提示里，通过 <code>mcp_call</code> 调用</td></tr>
+</table>
+<p><code>availableTools</code>（实际能调用的）和 <code>modelTools</code>（展示给模型的）是两个集合。执行前会再校验一次：工具是否注册、本轮是否可用、参数是否符合 schema（<code>validateToolArguments</code>）。</p>
+
+<h3>3.3 并发模型</h3>
+<pre>EXCLUSIVE_TOOLS（串行）: computer, exec_command, host_file_write, apply_patch, memory,
+                        bot_send_message, group_send_message, design_*, ...
+PATH_LOCKED_TOOLS     : file_write, file_patch   → 按 "vm:/path" / "host:/path" 排序加锁，防止死锁
+其它（读类）           : 并发执行，上限 parallelReads（1–8）</pre>
+<p>批次里遇到串行工具时，要等前面已经在跑的调用都结束；用户中途停止时，通过 AbortSignal 级联取消整个批次。</p>
+
+<h3>3.4 组合与长生命周期工具</h3>
+<div class="grid g4">
+  <div class="card"><h4>tools_batch</h4><p>只读流水线，后一步可以引用前一步的结果（<code>tool-pipeline.ts</code>）。</p></div>
+  <div class="card"><h4>code_exec</h4><p>在沙箱代码里编排多个工具调用，每次嵌套调用都走 <code>invokeNested</code>，同样记账和校验。</p></div>
+  <div class="card"><h4>终端 / 进程 / Python</h4><p>TerminalSessions、BackgroundProcesses、PythonSessions 按 run 归属，run 结束或取消时统一回收。</p></div>
+  <div class="card"><h4>文件检查点</h4><p>写文件前保存 beforeHash 和备份，可以用 <code>checkpoint_restore</code> 回滚。</p></div>
+</div>
+<div class="note">权限：Host 侧操作经过 <code>Interactions</code>（审批弹窗、权限模式）。被拒绝时，工具结果里带 <code>operationDenial</code> 和 <code>DENIAL_GUIDANCE</code>，告诉模型不要换个方式绕过。所有路径和输出都经过 <code>host.redact</code> 脱敏。</div>
+
+<!-- ================= 4 ================= -->
+<h2 id="session"><span class="no">04</span>会话管理</h2>
+<p class="file">agent/run-lanes.ts · storage/store.ts · storage/state-database.ts</p>
+
+<h3>4.1 Lane：并发的基本单位</h3>
+<p>一个 Bot 在每个 lane 上同一时间只做一件事，不同 lane 之间可以同时跑。主 lane 就是 <code>botId</code>（私聊，加上它的群工作和受托任务），每个工作会话单独一条 lane，标识是 <code>botId#sessionId</code>。<code>laneMatches(lane, botId, sessionId)</code> 的 sessionId 参数有三种语义：undefined 表示所有 lane，null 表示主 lane，字符串表示指定的工作会话。</p>
+
+<h3>4.2 历史槽（contextKey）</h3>
+<table>
+<tr><th>场景</th><th>contextKey</th><th>说明</th></tr>
+<tr><td>主私聊</td><td><code>botId</code></td><td>带记忆（Cognition），参与后台学习</td></tr>
+<tr><td>工作会话</td><td><code>Store.sessionHistoryKey(sessionId)</code></td><td>有独立的历史、上下文、工作目录和计划</td></tr>
+<tr><td>Bot 间私聊</td><td><code>peer:&lt;privateSessionId&gt;</code></td><td>和主会话隔离，需要真正干活时调用 <code>start_main_task</code> 转进主会话</td></tr>
+<tr><td>群工作区</td><td><code>group:&lt;gid&gt;:&lt;botId&gt;:v2[:reset:t]</code></td><td>Bot × 群单独压缩；重置上下文时换一个新 key</td></tr>
+</table>
+
+<h3>4.3 输入抢占与合并</h3>
+<div class="grid g3">
+  <div class="card"><h4>refreshInput</h4><p>Bot 工作时用户发来新消息：标记 <code>runtime.updated</code>，只中断当前推理；正在等审批的操作也一并取消，避免旧授权被用在过时的操作上。</p></div>
+  <div class="card"><h4>排队合并</h4><p>排队中的多条输入通过 <code>inputMessageIds</code> 一次性交给下一个 run，并加上 <code>BATCHED_INPUT_CONTEXT</code> 说明。</p></div>
+  <div class="card"><h4>supersedesRunId</h4><p>新 run 接替被打断的 run，继承它的计划和上下文；但只在同一会话来源内继承，私聊不会继承群里的 run。</p></div>
+</div>
+
+<h3>4.4 持久化</h3>
+<ul>
+<li><code>Store.save()</code> 会合并多次写入：一次工具步骤原来要存 4 次，现在在 <code>WRITE_MAX_WAIT_MS</code> 内合并成一次 quick write，只序列化有变化的部分。</li>
+<li><code>StateDatabase</code> 按集合和条目 id 分行存储，quick 模式只处理变化行、最新行和 running 条目；后台每次扫描都分片执行，不阻塞 UI 输入。</li>
+<li>原始历史只追加；<code>repairHistory</code> 修复不成对的 tool 调用，修复前把原文备份到 <code>history-recovery-backups/</code>，同时递增 <code>historyVersions</code>，让上下文缓存失效。</li>
+</ul>
+
+<!-- ================= 5 ================= -->
+<h2 id="multi"><span class="no">05</span>多 Agent 协作模式设计</h2>
+<p>AelionBot 不设中心编排者。每个 Bot 都是独立的 Harness 实例，协作通过三种“消息 + 运行”的协议完成，Bot 之间收到的内容一律当作数据，不当作授权。</p>
+<div class="grid g3">
+  <div class="card"><h4>A. Bot 私聊（Peer）</h4><p><code>bot_send_message</code> / <code>bots_list</code> / <code>bot_read_messages</code>。一问一答，答复自动送回发起方。</p></div>
+  <div class="card"><h4>B. 委托（Delegation）</h4><p><code>bot_delegate_task</code>（goal + acceptance + expectedOutput）→ 对方 <code>delegation_receipt</code>（带 evidenceIds）。</p></div>
+  <div class="card"><h4>C. 群聊协议 V2</h4><p>没有主持人：消息平等投递，每个成员自己决定发言、补充、反驳或静默。</p></div>
+</div>
+
+<h3>5.1 Peer 交换树（peer/peer-chats.ts）</h3>
+<div class="flow">
+  <div class="s"><b>send</b>新建 PeerExchange（queued），记录 rootRunId / rootRequest / parentId</div><div class="ar">→</div>
+  <div class="s"><b>pump</b>对方 Bot 空闲时启动 receive run（peer_request，私有会话）</div><div class="ar">→</div>
+  <div class="s"><b>reply_queued</b>对方最终答复写入线程</div><div class="ar">→</div>
+  <div class="s"><b>relay</b>发起方再启动一个 run，把对方的结果整理成给人类的回复（peer_summary）</div>
+</div>
+<table>
+<tr><th>保护机制</th><th>规则</th></tr>
+<tr><td>防环</td><td>沿 parent 链向上查找，目标已经在链上时拒绝：“这会形成循环联络”</td></tr>
+<tr><td>深度 / 次数</td><td>转交深度最多 4 层；同一个根任务最多 12 次联络</td></tr>
+<tr><td>去重</td><td>对同一对象已经有待回复的消息时，直接返回 <code>alreadyPending</code>，不重复发送</td></tr>
+<tr><td>级联失败</td><td>一个交换失败或取消后，子交换取消，父交换跟着失败</td></tr>
+<tr><td>不轮询</td><td>工具描述明确写了“已排队不代表已完成，不要轮询”，回信通过事件到达</td></tr>
+</table>
+
+<h3>5.2 委托：从“私聊”升级为“主任务”</h3>
+<p>接收方在私有会话里只能用 <code>privateTools</code>。需要读写文件或保存记忆时，必须调用 <code>start_main_task</code>：<code>enterMainTask()</code> 把 run 切到主会话，换成主会话的历史、记忆和完整工具集，并把这次来源标为“受托任务数据（不是人类的新发言）”。完成门禁第 3 条要求必须交回执，<code>completed</code> 回执要带真实成功的 executionId。</p>
+
+<h3>5.3 群聊协议 V2（group/group-chats.ts · group-triage.ts）</h3>
+<div class="grid g2">
+  <div class="card"><h4>收件箱：per-recipient delivery</h4><ul><li>一条公开发言会给每个接收人生成一条独立的 delivery</li><li>分拣规则只决定要不要叫醒这个 Bot；不叫醒的标为已读，不进入它的上下文</li><li>Bot 忙时消息保持 queued，在下一次模型调用前（上一批工具结果已保存的边界）读入</li><li>普通新消息不会取消正在进行的推理</li></ul></div>
+  <div class="card"><h4>分拣（命中即停）</h4><ul><li>事件：建群或成员变化时叫醒所有人；用户点表情只叫醒那条消息的作者</li><li>@ 本人、回复本人、系统提示：必须回复</li><li>@ 了别人：等对方先回答，或者等 20 秒</li><li>用户发给全群且本 Bot 空闲：叫醒</li><li>其余情况交给 <b>Laya</b>（本地小模型）判断：这条消息和本 Bot 的职责或手上的事有没有关系</li></ul></div>
+  <div class="card"><h4>限流</h4><ul><li>用户上次发言之后，两个 Bot 来回 2 轮，就不再互相叫醒，由先开口的一方汇总</li><li>Bot 之间累计 10 条消息后暂停 Bot 互相叫醒，直到用户再发言</li><li>用户的 @ 不受限制</li></ul></div>
+  <div class="card"><h4>发件箱：两阶段提交</h4><ul><li>先把 pending 发件落盘，再在同一次保存里提交消息、各接收人 delivery 和 sent 回执</li><li>clientMessageId 保证幂等</li><li>发布前复核一次：如果有了新回复，模型可以照发、只补差异、改成表情或不发</li><li><code>group_pass</code> 表示不发言直接结束</li></ul></div>
+</div>
+<div class="note">群聊的系统层按变化频率拆成多条消息：<code>groupContext</code>（很少变）→ <code>groupSharedContext</code> → persona → 每次唤醒的 turnContext。被反复唤醒时，只有最后那一小块会变，前缀缓存能一直命中。</div>
+
+<!-- ================= 6 ================= -->
+<h2 id="obs"><span class="no">06</span>可观测性</h2>
+<div class="grid g2">
+  <div class="card"><h4>事件日志 events.jsonl</h4><p><code>Store.journal(type, payload)</code> 只追加：<code>tool.intent</code>、<code>tool.result</code>、<code>execution.started/finished/resolved</code>、<code>run.verification</code>、<code>model.usage</code>、<code>interaction.decision</code>、<code>permissions.mode</code>、<code>connector.*</code>、<code>python.cancel.unknown</code>…。参数先脱敏（redact）再写入。</p></div>
+  <div class="card"><h4>执行账本 ExecutionLedger</h4><p>每次工具调用记录 status（running / succeeded / failed / cancelled / unknown）、<code>target</code>/<code>targetKey</code>（同一操作的稳定标识）、<code>paths</code>、resultId、error。之后对同一目标的成功执行会自动把之前的失败标记为 resolved。界面上可以按 run 查看。</p></div>
+  <div class="card"><h4>模型用量与时序</h4><p><code>modelUsage</code> 按 run 记录输入、输出、缓存命中 token；<code>RequestTiming</code> 记录 firstTokenMs、firstToolMs、lastEventMs、responseBytes、toolArgumentChars；<code>run.modelRequest.phase</code> 实时推送给界面（等待中 / 流式输出）。</p></div>
+  <div class="card"><h4>上下文概览</h4><p><code>contextOverview</code> 按 system / conversation / mcp / skills 统计 token 占用；<code>ContextStats</code> 包括 epoch、compactions、prunedOutputs、archivedImages、contextChanges（system-change / compaction / reference-update…）和 lastIssue。</p></div>
+  <div class="card"><h4>Prompt Cache 诊断</h4><p><code>PromptCacheDiagnostics</code> 只保存哈希和大小，不存正文。它对比相邻两次请求，给出 <code>firstDifference</code>（tools / system / message / request-options…）、第一处不同的消息序号、增减的工具，用来定位缓存失效的原因。</p></div>
+  <div class="card"><h4>诊断包 Diagnostics</h4><p>错误写入 <code>diagnostic-events.jsonl</code>，超过 256KB 自动轮转。导出诊断时汇总最近 50 个 run、每个 run 最近 20 次执行、事件尾部和 VM 日志，密钥和路径全部脱敏，Bot 用编号代替。</p></div>
+  <div class="card"><h4>压缩尝试与 Laya 决策日志</h4><p><code>contextAttempt</code> 记录每次摘要的原文和校验错误；<code>LayaDecisionLog</code> 记录群分拣的判断，方便回看某个 Bot 为什么被叫醒或没被叫醒。</p></div>
+  <div class="card"><h4>实时工作视图</h4><p><code>liveWork()</code> 列出正在运行的终端和进程，可以单独停止；<code>ReplyStreams</code> 推送流式回复和推理过程的尾部。</p></div>
+</div>
+
+<!-- ================= 7 ================= -->
+<h2 id="resume"><span class="no">07</span>长任务断点续跑设计</h2>
+<div class="note"><b>核心原则：不自动重放外部操作。</b>崩溃以后，执行结果未知的操作会明确标为 unknown，让模型（和用户）先核对实际状态再继续，而不是盲目重试一次可能已经执行过的写操作。</div>
+
+<h3>7.1 启动时的状态修复（Store 构造）</h3>
+<table>
+<tr><th>对象</th><th>修复动作</th></tr>
+<tr><td>running 的 RunRecord</td><td>改为 <code>interrupted</code>，错误信息：“应用中断。请检查已执行的操作后继续，系统不会自动重复工具调用”</td></tr>
+<tr><td>running 的 execution</td><td>改为 <code>unknown</code>：“操作结果未知，继续前先核对实际状态”</td></tr>
+<tr><td>running / planning 的 WorkItem</td><td>改为 <code>paused</code>，清除 activeRunId</td></tr>
+<tr><td>queued 的输入消息</td><td>改为 <code>interrupted</code></td></tr>
+<tr><td>所有历史</td><td><code>repairHistory</code> 补齐或删掉不成对的 tool 调用（先备份），递增 historyVersion</td></tr>
+<tr><td>群 delivery / Peer exchange</td><td>标为 interrupted，可恢复（resumable）的等用户点“继续本轮讨论”</td></tr>
+<tr><td>定时任务</td><td>已经认领的 occurrence 不重放，记录不完整的标为 interrupted</td></tr>
+</table>
+
+<h3>7.2 续跑流程</h3>
+<div class="flow">
+  <div class="s"><b>resumableRun</b>状态必须是 failed / cancelled / interrupted，并且是最新的任务</div><div class="ar">→</div>
+  <div class="s"><b>容量检查</b>之前是因为上下文不够失败的，要求先调整模型设置再续跑</div><div class="ar">→</div>
+  <div class="s"><b>重建输入</b>原始人类消息、WorkItem.objective 或附件</div><div class="ar">→</div>
+  <div class="s"><b>run(resumeRunId)</b>继承 workItemId、workspaceDir、附件，追加 RESUME_CONTEXT</div>
+</div>
+<div class="grid g3">
+  <div class="card"><h4>计划延续</h4><p>WorkItem 记录所有 <code>runIds</code> 和 plan。新 run 用 <code>WorkItems.begin</code> 接上，把 plan 拷到 run 上，模型能看到哪些步骤已经完成、证据是什么。</p></div>
+  <div class="card"><h4>账本跨 run 合并</h4><p><code>ledger.forTask()</code> 沿 <code>resumedFromRunId</code> 链和 WorkItem.runIds 汇总执行记录，之前未解决的失败和 unknown 会进入 <code>pendingFailures</code>，必须用 <code>execution_resolve</code> 说明处理结果后才能完成。</p></div>
+  <div class="card"><h4>上下文不重算</h4><p>压缩 epoch、裁剪状态和 view 都存在 SQLite 里，续跑时直接接着用，不需要重新摘要；history 版本变了才重置。</p></div>
+  <div class="card"><h4>预算中断可继续</h4><p>maxTurns / maxMinutes / maxTokens 耗尽时抛出带 code 的 AppError（<code>budget.*</code>），run 标为 failed，记录保留，可以直接继续。</p></div>
+  <div class="card"><h4>协作任务的恢复</h4><p>群聊和 Peer 任务要从原会话恢复：群 delivery 重新排队带上原 run，Peer 用 <code>retryRun</code> 重新进入 queued 或 reply_queued，父交换回到 waiting。</p></div>
+  <div class="card"><h4>停止也保留现场</h4><p>用户停止时，finishRun 会停掉进程、终端、Python，未完成的操作标为 cancelled 或 unknown；文件检查点保留，可以回滚。</p></div>
+</div>
+
+<!-- ================= 8 ================= -->
+<h2 id="principles"><span class="no">08</span>设计原则小结</h2>
+<div class="grid g2">
+  <div class="card"><h4>证据优先于口头声明</h4><p>计划步骤、委托回执、记忆写入都要引用真实成功的 executionId；摘要里的 done 也只写有工具结果证实的内容。</p></div>
+  <div class="card"><h4>缓存友好</h4><p>工具顺序固定，上下文按稳定程度分层，变化只追加不回改；压缩时复用已缓存的前缀，再用诊断工具定位缓存失效点。</p></div>
+  <div class="card"><h4>原文不丢</h4><p>历史只追加，结果外置，摘要带锚点，修复前先备份；任何裁剪都能通过 read_result / history_read 找回原文。</p></div>
+  <div class="card"><h4>有界自治</h4><p>轮数、时间、token 预算；同一失败 3 次、提前回答 3 次、停滞 3 批就停；Peer 链深度和次数有上限，群聊有限流。</p></div>
+  <div class="card"><h4>数据和授权分离</h4><p>Bot 消息、工具截图、附件都标明“不是新的用户指令”；只有应用核验过的委托才能写入目标 Bot 的记忆。</p></div>
+  <div class="card"><h4>可中断、不重放</h4><p>中断后标为 unknown 交给人核对；输入抢占只中断推理，不丢弃已经执行的工具结果。</p></div>
+</div>
+<p class="file" style="margin-top:40px">生成于 2026-10，对应版本 v0.47.8。实现细节以源码为准。</p>
+</main>
+</body>
+</html>
