@@ -1,6 +1,9 @@
 import { ROLE_NAMES, PHASE_NAMES, ACTION_NAMES } from '../../shared/games/game-boards';
+import { tileName } from '../../shared/games/mahjong-rules';
 import { useI18n } from '../i18n';
-import { useEffect, useState } from 'react';
+import { Select } from '../ui/Select';
+import { useSwitchMotion } from '../ui/motion';
+import { useEffect, useRef, useState } from 'react';
 import type { GameTrace, GameView, GameAction } from '../../shared/types/game-types';
 const labels: Record<GameTrace['type'], string> = {
   created: '创建对局',
@@ -27,12 +30,15 @@ const labels: Record<GameTrace['type'], string> = {
 const phases: Record<string, string> = PHASE_NAMES;
 const kinds: Record<string, string> = ACTION_NAMES;
 const roles: Record<string, string> = ROLE_NAMES;
+const CARD_KINDS = ['bid', 'play', 'discard', 'claim'];
 export function GameDiagnostics({ game }: { game: GameView }) {
   const { t } = useI18n();
   const [events, setEvents] = useState<GameTrace[]>([]),
     [error, setError] = useState(''),
     [seat, setSeat] = useState(''),
     [mode, setMode] = useState<'decisions' | 'technical'>('decisions');
+  const root = useRef<HTMLElement>(null);
+  useSwitchMotion(root, mode, '.wg-record-tabs ~ .wg-traces');
   const allowed = !game.humanId || game.status === 'finished';
   // Party games count rounds, not days and nights.
   const rounds = !!game.mode && game.mode !== 'werewolf';
@@ -40,8 +46,9 @@ export function GameDiagnostics({ game }: { game: GameView }) {
     rounds
       ? t('第 {round} 轮', { round: day })
       : t('第 {day} {period}', { day, period: t(phase === 'night' ? '夜' : '天') });
+  const cards = game.mode === 'doudizhu' || game.mode === 'mahjong';
   const phaseName = (phase: string) =>
-    rounds
+    rounds && !cards
       ? phase === 'vote'
         ? '投票'
         : phase === 'resolution'
@@ -54,7 +61,23 @@ export function GameDiagnostics({ game }: { game: GameView }) {
     const i = game.seats.findIndex((p) => p.id === id);
     return i < 0 ? t('无') : t('{seat} 号 {name}', { seat: i + 1, name: game.seats[i].name });
   };
-  const actionText = (a: GameAction, kind?: string) =>
+  /** A card or tile move as the table reads it, with the line of table talk that came with it. */
+  const cardMove = (a: GameAction, kind?: string) => {
+    const [move, tile] = (a.target || '').split(':');
+    const text = a.skip
+      ? t(kind === 'bid' ? '不叫' : kind === 'claim' ? '过' : '不要')
+      : kind === 'bid'
+        ? t('叫 {count} 分', { count: Number(move.slice(3)) })
+        : kind === 'play'
+          ? move.split('-').join(' ')
+          : tile
+            ? `${t({ d: '打出', ag: '暗杠', jg: '加杠' }[move] || move)} ${tileName(tile)}`
+            : t({ hu: '和牌', peng: '碰', gang: '杠' }[move] || move);
+    return text + (a.text ? ` 「${a.text}」` : '');
+  };
+  const actionText = (a: GameAction, kind?: string): string =>
+    kind && CARD_KINDS.includes(kind) ? cardMove(a, kind) : moveText(a, kind);
+  const moveText = (a: GameAction, kind?: string) =>
     a.choice !== undefined
       ? kind === 'withdraw'
         ? a.choice
@@ -316,18 +339,23 @@ export function GameDiagnostics({ game }: { game: GameView }) {
     return e.detail;
   }
   return (
-    <section className="wg-diagnostics" aria-label={t('运行记录')}>
+    <section ref={root} className="wg-diagnostics" aria-label={t('运行记录')}>
       <div className="gg-config-heading">
         <strong>{t('运行记录')}</strong>
         {allowed && (
-          <select aria-label={t('筛选玩家记录')} value={seat} onChange={(e) => setSeat(e.target.value)}>
+          <Select
+            className="wg-seat-select"
+            aria-label={t('筛选玩家记录')}
+            value={seat}
+            onChange={(e) => setSeat(e.target.value)}
+          >
             <option value="">{t('全部玩家')}</option>
             {game.seats.map((p) => (
               <option key={p.id} value={p.id}>
                 {name(p.id)}
               </option>
             ))}
-          </select>
+          </Select>
         )}
       </div>
       {!allowed ? (

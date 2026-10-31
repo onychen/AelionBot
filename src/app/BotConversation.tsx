@@ -18,6 +18,7 @@ import type { TimelineItem } from '../../shared/chat/activity';
 import { isRunArtifact } from '../../shared/preview/workspace-files';
 import type { PreviewHistoryEntry } from '../../shared/preview/agent-preview-types';
 import { workspaceKey } from '../../shared/types/work-types';
+import { canRetract } from '../../shared/chat/retract';
 import { ConversationTimeProvider } from '../chat/ConversationTime';
 import { RunMessage } from '../chat/RunMessage';
 import { BotWorkingStatus } from '../chat/BotWorkingStatus';
@@ -69,6 +70,7 @@ export function BotConversation({
   followLive,
   onSend,
   onReply,
+  onEdit,
   onContinue,
   onSettings,
   onScreen,
@@ -93,6 +95,8 @@ export function BotConversation({
   followLive: () => void;
   onSend: () => void;
   onReply: (message: ChatMessage) => void;
+  /** Takes back a message still waiting or being worked on, to edit it in the composer. */
+  onEdit: (message: ChatMessage) => void;
   onContinue: () => void;
   onSettings: (tab: 'model' | 'computer' | 'mcp') => void;
   onScreen: (url: string) => void;
@@ -110,6 +114,7 @@ export function BotConversation({
   const composerWrap = useFloatingComposer();
   const actions = useStableHandlers<Actions>({
     reply: onReply,
+    edit: onEdit,
     continueWork: onContinue,
     settings: onSettings,
     screen: onScreen,
@@ -208,6 +213,7 @@ export function BotConversation({
                       groups={message.groupTaskSource || message.groupLink ? state.groups : undefined}
                       peers={message.taskSource || message.peer ? state.peers : undefined}
                       allowPins={!runsById.get(message.runId || '')?.groupOrigin}
+                      editable={canRetract(message, runsById.get(message.runId || ''))}
                       actions={actions}
                     />
                   );
@@ -279,7 +285,6 @@ export function BotConversation({
               {(running || greeting) && (
                 <BotWorkingStatus
                   bot={bot}
-                  onStop={actions.stop}
                   onReview={waiting ? () => onReview(waiting) : undefined}
                   step={
                     liveBotStep(
@@ -320,7 +325,6 @@ export function BotConversation({
           liveRequest={running ? latestRun?.modelRequest : undefined}
           contextCapacity={currentModel?.contextTokens}
           permissionMode={state.hostPermissionModes?.[scope] ?? state.hostPermissionModes?.[botScope]}
-          permissionLocked={Boolean(session?.connector)}
           workspaceDir={state.conversationWorkspaces?.[scope] || state.hostWorkspace?.workspaceDir}
           workspaceInherited={!state.conversationWorkspaces?.[scope]}
           bot={bot}
@@ -337,6 +341,7 @@ export function BotConversation({
 /** What timeline rows can do; stable across renders, so rows skip renders their callbacks would otherwise cause. */
 type Actions = {
   reply: (message: ChatMessage) => void;
+  edit: (message: ChatMessage) => void;
   continueWork: () => void;
   settings: (tab: 'model' | 'computer' | 'mcp') => void;
   screen: (url: string) => void;
@@ -359,6 +364,7 @@ const TimelineMessage = memo(function TimelineMessage({
   groups,
   peers,
   allowPins,
+  editable,
   actions,
 }: {
   message: ChatMessage;
@@ -366,6 +372,7 @@ const TimelineMessage = memo(function TimelineMessage({
   groups?: GroupsView;
   peers?: PeerView;
   allowPins: boolean;
+  editable: boolean;
   actions: Actions;
 }) {
   if (message.groupTaskSource) return <GroupTaskMessage message={message} view={groups} onOpen={actions.openGroup} />;
@@ -384,7 +391,14 @@ const TimelineMessage = memo(function TimelineMessage({
     );
   if (message.taskSource) return <PeerTaskMessage message={message} view={peers} onOpen={actions.openPrivateChat} />;
   if (message.peer) return <PeerNotice message={message} view={peers} onOpen={actions.openPrivateChat} />;
-  return <Message message={shown || message} onReply={actions.reply} allowPins={allowPins} />;
+  return (
+    <Message
+      message={shown || message}
+      onReply={actions.reply}
+      onEdit={editable ? actions.edit : undefined}
+      allowPins={allowPins}
+    />
+  );
 }, sameProps);
 
 /** A run's work and answer, with the previews and files it produced. */
@@ -449,6 +463,7 @@ const TimelineRun = memo(function TimelineRun({
         attachmentIds={
           new Set(allRunMessages.flatMap((message) => message.attachments?.map((attachment) => attachment.id) || []))
         }
+        hideDesignCanvas={Boolean(run?.designSessionId)}
         onOpen={actions.openPreviewEntry}
       />
       {/* A design task is an experience, not a file list. Its canvas opens the home page; export remains available from the preview. */}

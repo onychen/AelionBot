@@ -46,6 +46,8 @@ export interface ConnectorDeps {
   cancel(botId: string, sessionId: string): void;
   isRunning(botId: string, sessionId: string): boolean;
   setPermission(botId: string, sessionId: string, mode: HostPermissionMode): void;
+  /** Whether a session already has its own mode; the connector default fills only the missing ones. */
+  hasPermission?(sessionId: string): boolean;
   interactions: OutboxHost['interactions'];
   changed(): void;
   lark(): LarkSdk;
@@ -90,7 +92,12 @@ export class Connectors {
     });
   }
   start() {
-    for (const connector of this.saved.data.connectors) if (connector.enabled) this.connect(connector);
+    for (const connector of this.saved.data.connectors) {
+      for (const session of this.sessions(connector.id))
+        if (!this.deps.hasPermission?.(session.id))
+          this.deps.setPermission(session.botId, session.id, connector.permissionMode);
+      if (connector.enabled) this.connect(connector);
+    }
   }
   snapshot(): ConnectorsView {
     return {
@@ -114,11 +121,6 @@ export class Connectors {
     this.saved.data.keepRunning = enabled;
     this.saved.save();
     this.deps.changed();
-  }
-  /** Connector sessions take their permission mode from the connector, so the app does not set it per session. */
-  sessionLocked(sessionId: string | undefined) {
-    const session = sessionId ? this.deps.store.data.workSessions?.find((item) => item.id === sessionId) : undefined;
-    return Boolean(session?.connector && this.saved.get(session.connector.connectorId));
   }
   wrapRun(botId: string, options: HarnessRunOptions, start: (options: HarnessRunOptions) => Promise<void>) {
     return this.outbox.wrapRun(botId, options, start);
@@ -395,18 +397,19 @@ export class Connectors {
     const person = message.sender,
       isOwner = connector.owner?.id === person.id,
       allowed = connector.allowed.find((item) => item.id === person.id);
-    if (!isOwner && !allowed) {
-      // Only the owner and people they approved can wake the Bot in a group; strangers are not paired there.
-      if (message.isGroup) return void this.saved.save();
+    // WeCom's bot settings already decide who may talk to it; a group message is not filtered again here.
+    if (!isOwner && !allowed && !message.isGroup) {
       this.saved.save();
       return this.pair(connector, message, adapter);
     }
     // Remember the private chat that reaches this person, for approvals sent to the owner later. A group message
     // must not replace it, or approvals would be posted where everyone in the group can see them.
-    const record = isOwner ? connector.owner! : allowed!;
-    if ((!message.isGroup && record.chatId !== message.chatId) || (person.name && record.name !== person.name)) {
-      if (!message.isGroup) record.chatId = message.chatId;
-      if (person.name) record.name = person.name;
+    const record = isOwner ? connector.owner : allowed;
+    if (record) {
+      if ((!message.isGroup && record.chatId !== message.chatId) || (person.name && record.name !== person.name)) {
+        if (!message.isGroup) record.chatId = message.chatId;
+        if (person.name) record.name = person.name;
+      }
     }
     this.saved.save();
     this.deps.changed();
@@ -453,7 +456,7 @@ export class Connectors {
           platform: connector.platform,
           messageId: message.messageId,
           ...(message.isGroup ? { isGroup: true } : {}),
-          sender: { id: person.id, ...(record.name ? { name: record.name } : {}) },
+          sender: { id: person.id, ...(record?.name || person.name ? { name: record?.name || person.name } : {}) },
         },
       });
     } catch (error) {

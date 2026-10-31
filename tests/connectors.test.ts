@@ -158,7 +158,6 @@ test('a manual connector pairs its first sender as owner, then routes their mess
     peer: { id: 'owner', name: '小周' },
   });
   assert.deepEqual(modes, [{ sessionId: session.id, mode: 'ask' }]);
-  assert.equal(connectors.sessionLocked(session.id), true);
 
   // The owner can talk to the Bot in a group; the session is tied to the group chat, while approvals stay private.
   adapter.receive({ text: '群里问一句', isGroup: true, chatId: 'group-1' });
@@ -172,29 +171,29 @@ test('a manual connector pairs its first sender as owner, then routes their mess
     peer: { id: 'owner', name: '小周' },
   });
   assert.equal(sent[1].message, '群里问一句');
-  assert.equal(connectors.sessionLocked(groupSession.id), true);
   assert.equal(
     connectors.saved.data.connectors[0].owner?.chatId,
     'chat-owner',
     'a group message does not move approvals into the group',
   );
 
-  // Strangers in a group are ignored without a pairing request; a private stranger still gets one.
-  adapter.receive({ text: '我是陌生人', isGroup: true, chatId: 'group-1', sender: { id: 'stranger' } });
-  await settle();
-  assert.equal(sent.length, 2);
+  // Any group member WeCom lets through reaches the same group session; private strangers still need pairing.
+  adapter.receive({ text: '群友问一句', isGroup: true, chatId: 'group-1', sender: { id: 'guest' } });
+  await until(() => sent.length === 3);
+  assert.equal(sent[2].sessionId, groupSession.id);
+  assert.equal(sent[2].message, '群友问一句');
   assert.equal(connectors.snapshot().connectors[0].pairings.length, 0);
   adapter.receive({ text: '我是陌生人', chatId: 'chat-x', sender: { id: 'stranger' } });
   await until(() => connectors.snapshot().connectors[0].pairings.length === 1);
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 3);
   assert.ok(adapter.texts.some((item) => item.chatId === 'chat-owner' && /请求使用/.test(item.text)));
 
   // /new archives the private session; the next message opens another one.
   adapter.receive({ text: '/new' });
   await until(() => Boolean(session.archivedAt));
   adapter.receive({ text: '新的事情' });
-  await until(() => sent.length === 3);
-  assert.notEqual(sent[2].sessionId, session.id);
+  await until(() => sent.length === 4);
+  assert.notEqual(sent[3].sessionId, session.id);
 
   connectors.update({ id, permissionMode: 'full' });
   assert.deepEqual(
@@ -203,7 +202,6 @@ test('a manual connector pairs its first sender as owner, then routes their mess
   );
   await connectors.remove(id);
   assert.equal(session.connector, undefined, 'removing a connector leaves its sessions as ordinary ones');
-  assert.equal(connectors.sessionLocked(session.id), false);
 });
 
 test('group messages only reach the Bot on WeCom, which pushes them for @mentions', async (t) => {
@@ -229,7 +227,15 @@ test('connector messages run the Bot and its answer goes back; desktop input in 
   let replies = 0;
   const model = {
     complete: async () =>
-      answer(++replies === 1 ? '日程已经整理好了。' : replies === 2 ? '群里安排好了。' : '桌面上的回答'),
+      answer(
+        ++replies === 1
+          ? '日程已经整理好了。'
+          : replies === 2
+            ? '群里安排好了。'
+            : replies === 3
+              ? '群友的问题答好了。'
+              : '桌面上的回答',
+      ),
   } as unknown as ModelClient;
   const harness = new Harness(store, {} as VmController, model, () => {});
   let connectors: Connectors | undefined;
@@ -289,11 +295,16 @@ test('connector messages run the Bot and its answer goes back; desktop input in 
   assert.equal(groupInput.connector?.isGroup, true);
   assert.notEqual(groupInput.sessionId, input.sessionId);
 
+  // Another group member gets an answer in the same group.
+  adapter.receive({ text: '群友也问一句', isGroup: true, chatId: 'group-1', sender: { id: 'guest' } });
+  await until(() => adapter.texts.length === 3);
+  assert.deepEqual(adapter.texts[2], { chatId: 'group-1', text: '群友的问题答好了。' });
+
   // The same session, written from the app: the Bot answers in the app only.
   queue.send({ botId: bot.id, sessionId: input.sessionId, message: '桌面上问一句' });
-  await until(() => replies === 3 && !harness.busy);
+  await until(() => replies === 4 && !harness.busy);
   await settle();
-  assert.equal(adapter.texts.length, 2);
+  assert.equal(adapter.texts.length, 3);
 });
 
 test('approvals of connector runs go to the owner as cards; only the owner decides', async (t) => {
@@ -399,6 +410,68 @@ test('approvals of connector runs go to the owner as cards; only the owner decid
       error ? ['这次没有完成：' + error] : [],
     );
   }
+});
+
+test('the owner allows or denies computer use of a connector run from the chat', async (t) => {
+  const { store, bot, adapter, connectors, interactions, sent } = fixture(t);
+  const id = connectors.add({
+    botId: bot.id,
+    permissionMode: 'ask',
+    credentials: { platform: 'feishu', appId: 'cli_computer', appSecret: 'fixture-secret' },
+  });
+  connectors.saved.get(id)!.owner = { id: 'owner', chatId: 'chat-owner' };
+  adapter.receive({ text: '帮我在电脑上打开设置' });
+  await until(() => sent.length === 1);
+  const session = store.data.workSessions!.find((item) => item.connector?.connectorId === id)!;
+  const message = store.message(bot.id, 'user', '帮我在电脑上打开设置', {
+    sessionId: session.id,
+    connector: { connectorId: id, platform: 'feishu', messageId: 'y', sender: { id: 'owner' } },
+  });
+  let finish!: () => void;
+  const running = connectors.wrapRun(
+    bot.id,
+    { sessionId: session.id, inputMessageIds: [message.id] },
+    async (options) => {
+      options.onStarted?.('run-computer');
+      await new Promise<void>((resolve) => (finish = resolve));
+    },
+  );
+  const controller = new AbortController();
+  const allowed = interactions.computerAccess(bot.id, 'run-computer', controller.signal);
+  await until(() => adapter.cards.length === 1);
+  const card = adapter.cards[0];
+  assert.equal(card.chatId, 'chat-owner');
+  assert.match(card.card.title, /操控这台电脑/);
+  const allow = card.card.buttons.find((button) => button.key.endsWith(':allow'))!;
+  assert.equal(
+    await adapter.handlers!.action({ chatId: 'chat-owner', operator: { id: 'stranger' }, key: allow.key }),
+    undefined,
+  );
+  assert.equal(interactions.snapshot().length, 1);
+  assert.equal(
+    await adapter.handlers!.action({ chatId: 'chat-owner', operator: { id: 'owner' }, key: allow.key }),
+    '已允许',
+  );
+  await allowed;
+  await until(() => adapter.closed.length === 1);
+
+  // A text reply from the owner decides the only request waiting, without its code.
+  const denied = interactions.computerAccess(bot.id, 'run-computer', controller.signal);
+  await until(() => adapter.cards.length === 2);
+  adapter.receive({ text: '拒绝', sender: { id: 'stranger', name: '路人' }, chatId: 'chat-owner' });
+  await settle();
+  assert.equal(interactions.snapshot().length, 1);
+  adapter.receive({ text: '拒绝' });
+  await assert.rejects(denied, { code: 'permission.denied' });
+
+  // Decided on the computer instead: the card says so.
+  const local = interactions.computerAccess(bot.id, 'run-computer', controller.signal);
+  await until(() => adapter.cards.length === 3);
+  interactions.decideComputerAccess(interactions.snapshot()[0].id, true);
+  await local;
+  await until(() => adapter.closed.some((item) => item.result === '已在电脑上处理'));
+  finish();
+  await running;
 });
 
 test('the final reply to a private message sent while answering a connector chat goes back to that chat', async (t) => {

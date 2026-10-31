@@ -141,7 +141,20 @@ let polling = false;
 const REVEAL_MS = 3000;
 const startup = new StartupTimer();
 let exiting = false;
-if (!app.requestSingleInstanceLock()) {
+ipcMain.on('window:toggle-maximize', (event) => {
+  const target = BrowserWindow.fromWebContents(event.sender) || window;
+  if (!target) return;
+  if (target.isMaximized()) target.unmaximize();
+  else target.maximize();
+});
+// A packaged build in /Applications owns the single-instance lock. Dev builds (source, a local
+// app bundle or a DMG) may run beside it so UI work does not require quitting the installed app.
+const developmentBuild =
+  !app.isPackaged ||
+  process.env.AELION_DEV === '1' ||
+  process.argv.includes('--dev') ||
+  (process.platform === 'darwin' && !process.execPath.startsWith('/Applications/'));
+if (!developmentBuild && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   // Another launch while this one runs: bring its window forward, even while the page is still loading.
@@ -347,6 +360,71 @@ async function initialize() {
   });
   computer = new ComputerController(vm, dataDir, changed);
   artifacts = new ArtifactService(store, vm);
+  // Model requests inline every picture as base64, and a long vision session can exceed the provider's body limit.
+  // Stored screenshots stay lossless for the interface; what goes to the model is a smaller JPEG of the same frame.
+  const MODEL_IMAGE_SIDE = 2048,
+    MODEL_IMAGE_QUALITY = 86,
+    MODEL_IMAGE_KEEP_BYTES = 512 * 1024,
+    MODEL_IMAGE_CACHE_ENTRIES = 32,
+    modelImageCache = new Map<string, string>();
+  function opaqueModelImage(image: ReturnType<typeof nativeImage.createFromBuffer>) {
+    const size = image.getSize(),
+      bitmap = image.toBitmap();
+    let transparent = false;
+    for (let at = 3; at < bitmap.length; at += 4)
+      if (bitmap[at] !== 255) {
+        transparent = true;
+        break;
+      }
+    if (!transparent) return image;
+    // JPEG has no alpha: blend transparent pixels onto white instead of letting the encoder paint them black.
+    for (let at = 0; at < bitmap.length; at += 4) {
+      const alpha = bitmap[at + 3] / 255;
+      if (alpha === 1) continue;
+      bitmap[at] = Math.round(bitmap[at] * alpha + 255 * (1 - alpha));
+      bitmap[at + 1] = Math.round(bitmap[at + 1] * alpha + 255 * (1 - alpha));
+      bitmap[at + 2] = Math.round(bitmap[at + 2] * alpha + 255 * (1 - alpha));
+      bitmap[at + 3] = 255;
+    }
+    return nativeImage.createFromBitmap(bitmap, size);
+  }
+  function modelImage(id: string) {
+    const cached = modelImageCache.get(id);
+    if (cached) {
+      modelImageCache.delete(id);
+      modelImageCache.set(id, cached);
+      return cached;
+    }
+    const png = computer.readImage(id);
+    let value = `data:image/png;base64,${png.toString('base64')}`;
+    try {
+      const image = nativeImage.createFromBuffer(png);
+      if (!image.isEmpty()) {
+        const { width, height } = image.getSize(),
+          scale = Math.min(1, MODEL_IMAGE_SIDE / Math.max(width, height));
+        if (scale < 1 || png.length > MODEL_IMAGE_KEEP_BYTES) {
+          const resized =
+              scale < 1
+                ? image.resize({
+                    width: Math.max(1, Math.round(width * scale)),
+                    height: Math.max(1, Math.round(height * scale)),
+                    quality: 'best',
+                  })
+                : image,
+            jpeg = opaqueModelImage(resized).toJPEG(MODEL_IMAGE_QUALITY);
+          if (jpeg.length && jpeg.length < png.length) value = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+        }
+      }
+    } catch {
+      // Keep the original bytes when Electron cannot decode or re-encode this picture.
+    }
+    if (modelImageCache.size >= MODEL_IMAGE_CACHE_ENTRIES) {
+      const oldest = modelImageCache.keys().next().value;
+      if (oldest) modelImageCache.delete(oldest);
+    }
+    modelImageCache.set(id, value);
+    return value;
+  }
   const imagePreview = (bytes: Buffer, id: string) => {
     const image = nativeImage.createFromBuffer(bytes);
     if (image.isEmpty()) return;
@@ -463,7 +541,7 @@ async function initialize() {
   model = new ModelClient(
     (botId) => providers.config(botId),
     (botId) => providers.key(botId),
-    (id) => computer.image(id),
+    modelImage,
     () => new RunPolicy(store).settings(),
     (record) => {
       record.runId ||= store.data.runs.find((run) => run.botId === record.botId && run.status === 'running')?.id;
@@ -661,6 +739,7 @@ async function initialize() {
     () => Boolean(updatePreparing || harness?.busy || groupChats?.busy),
     () => providers.secrets(),
   );
+  cognition.onSlow = cognition.learning.onSlow = (source, ms) => slow?.(source, ms);
   agentPreviews = new AgentPreviews(store, artifacts, attachments, changed, host);
   const imageModelAccess = (botId: string) => providers.imageAccess(botId);
   const generalHarness = new Harness(
@@ -873,6 +952,7 @@ async function initialize() {
     setPermission: (botId, sessionId, mode) => {
       if (hostApprovals.set({ kind: 'bot', id: botId, sessionId }, mode)) interactions.refreshHostPolicy();
     },
+    hasPermission: (sessionId) => hostApprovals.hasSessionMode(sessionId),
     interactions,
     changed: () => {
       changed();
@@ -1026,7 +1106,8 @@ async function initialize() {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 18, y: 18 } }
-      : { titleBarOverlay: { color: '#f7f7f7', symbolColor: '#555555', height: 38 } }),
+      : // Transparent so the shell's gradient (and any modal backdrop) runs under the caption buttons.
+        { titleBarOverlay: { color: '#00000000', symbolColor: '#555555', height: 38 } }),
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -1105,7 +1186,7 @@ async function initialize() {
     window.setBackgroundColor(dark ? '#202024' : '#ffffff');
     if (process.platform !== 'darwin' && !appearanceDimmed)
       window.setTitleBarOverlay({
-        color: dark ? '#25232a' : '#f7f7f7',
+        color: '#00000000',
         symbolColor: dark ? '#eeeaf2' : '#555555',
         height: 38,
       });

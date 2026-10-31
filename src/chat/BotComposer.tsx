@@ -22,6 +22,8 @@ import {
 } from '../../shared/types/attachment-types';
 import { Avatar } from '../ui/Avatar';
 import { Icon } from '../ui/Icon';
+import { useLiquidGlass } from '../ui/liquid-glass';
+import { Presence } from '../ui/Presence';
 import { CompanionGlyph } from '../bots/CompanionCard';
 import { botIdentity, normalizeBotAvatarStyle, type BotPalette } from '../../shared/chat/bot-colors';
 import { botAvatarDataUrl } from '../bots/bot-avatar';
@@ -30,6 +32,8 @@ import { PreviewAnnotationChips } from '../preview/PreviewAnnotationChips';
 
 export interface ComposerDraft {
   reply?: MessageReply;
+  /** The message this draft was taken back from to edit; setting it puts the caret at the end of the text. */
+  restoredFrom?: string;
   text: string;
   mentions: BotMention[];
   attachments?: Attachment[];
@@ -159,7 +163,6 @@ export function BotComposer({
   workspaceDir,
   workspaceInherited,
   permissionMode,
-  permissionLocked = false,
   contextOverview,
   contextCapacity,
   requestMetrics,
@@ -188,14 +191,13 @@ export function BotComposer({
   workspaceDir?: string;
   workspaceInherited?: boolean;
   permissionMode?: HostPermissionMode;
-  /** The conversation follows a connector's permission mode, set on the Plugins page. */
-  permissionLocked?: boolean;
   onChange: (draft: ComposerDraft) => void;
   onSend: () => void;
   onStop: () => void;
 }) {
   const { t } = useI18n();
-  const editor = useRef<HTMLDivElement>(null),
+  const root = useRef<HTMLDivElement>(null),
+    editor = useRef<HTMLDivElement>(null),
     list = useRef<HTMLDivElement>(null),
     last = useRef(''),
     composing = useRef(false),
@@ -506,7 +508,7 @@ export function BotComposer({
     }
   }, [draft]);
   useEffect(() => {
-    if (draft.reply) {
+    if (draft.reply || draft.restoredFrom) {
       const root = editor.current;
       if (!root) return;
       root.focus({ preventScroll: true });
@@ -517,7 +519,7 @@ export function BotComposer({
       selection?.removeAllRanges();
       selection?.addRange(range);
     }
-  }, [draft.reply?.messageId]);
+  }, [draft.reply?.messageId, draft.restoredFrom]);
   useLayoutEffect(() => {
     for (const node of editor.current?.querySelectorAll<HTMLElement>('[data-bot-id]') || []) {
       const live = bots.find((item) => item.id === node.dataset.botId);
@@ -532,8 +534,10 @@ export function BotComposer({
         list.current.scrollTop = item.offsetTop + item.offsetHeight - list.current.clientHeight;
     }
   }, [active]);
+  useLiquidGlass(root);
   return (
     <div
+      ref={root}
       className={`composer mention-composer ${dragging ? 'is-dragging' : ''}`}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) {
@@ -606,64 +610,68 @@ export function BotComposer({
           </button>
         </div>
       )}
-      {commands.length > 0 && (
-        <div className="command-picker" role="listbox" id={id + '-commands'} aria-label={t('选择计划或目标')}>
-          {commands.map((command, index) => (
-            <button
-              type="button"
-              key={command.name}
-              id={id + '-command-' + index}
-              role="option"
-              aria-selected={index === commandActive}
-              className={index === commandActive ? 'active' : ''}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => chooseCommand(command.name)}
-            >
-              <span className={`composer-menu-icon composer-menu-${command.name}`}>
-                <CompanionGlyph kind={command.name} />
-              </span>
-              <span className="command-copy">
-                <strong>{t(command.label)}</strong>
-                <small>{t(command.description)}</small>
-              </span>
-              <code>/{command.name}</code>
-            </button>
-          ))}
-        </div>
-      )}
-      {query && (
-        <div ref={list} className="mention-picker" role="listbox" id={id} aria-label={t('选择 Bot 或文件')}>
-          {options.map((option, index) => (
-            <button
-              key={option.kind === 'bot' ? 'bot:' + option.bot.id : 'file:' + option.file.path}
-              title={option.kind === 'file' ? option.file.path : undefined}
-              id={`${id}-${index}`}
-              role="option"
-              aria-selected={index === active}
-              className={index === active ? 'active' : ''}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => chooseOption(option)}
-            >
-              {option.kind === 'bot' ? <Avatar bot={option.bot} size={30} /> : <Icon name="file" size={24} />}
-              <span>
-                <strong>{option.kind === 'bot' ? option.bot.name : option.file.relativePath}</strong>
-                <small>
-                  {option.kind === 'bot' ? soulSummary(option.bot.soul) || 'Bot' : t('文件引用 · 不复制原文件')}
-                </small>
-              </span>
-            </button>
-          ))}
-          {filesLoading && (
-            <div className="mention-empty" role="status">
-              {t('正在搜索文件…')}
-            </div>
-          )}
-          {fileSearchError && <div className="mention-empty">{fileSearchError}</div>}
-          {!options.length && !filesLoading && !fileSearchError && (
-            <div className="mention-empty">{t('没有匹配的 Bot 或文件')}</div>
-          )}
-        </div>
-      )}
+      <Presence>
+        {commands.length > 0 && (
+          <div className="command-picker" role="listbox" id={id + '-commands'} aria-label={t('选择计划或目标')}>
+            {commands.map((command, index) => (
+              <button
+                type="button"
+                key={command.name}
+                id={id + '-command-' + index}
+                role="option"
+                aria-selected={index === commandActive}
+                className={index === commandActive ? 'active' : ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseCommand(command.name)}
+              >
+                <span className={`composer-menu-icon composer-menu-${command.name}`}>
+                  <CompanionGlyph kind={command.name} />
+                </span>
+                <span className="command-copy">
+                  <strong>{t(command.label)}</strong>
+                  <small>{t(command.description)}</small>
+                </span>
+                <code>/{command.name}</code>
+              </button>
+            ))}
+          </div>
+        )}
+      </Presence>
+      <Presence>
+        {query && (
+          <div ref={list} className="mention-picker" role="listbox" id={id} aria-label={t('选择 Bot 或文件')}>
+            {options.map((option, index) => (
+              <button
+                key={option.kind === 'bot' ? 'bot:' + option.bot.id : 'file:' + option.file.path}
+                title={option.kind === 'file' ? option.file.path : undefined}
+                id={`${id}-${index}`}
+                role="option"
+                aria-selected={index === active}
+                className={index === active ? 'active' : ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseOption(option)}
+              >
+                {option.kind === 'bot' ? <Avatar bot={option.bot} size={30} /> : <Icon name="file" size={24} />}
+                <span>
+                  <strong>{option.kind === 'bot' ? option.bot.name : option.file.relativePath}</strong>
+                  <small>
+                    {option.kind === 'bot' ? soulSummary(option.bot.soul) || 'Bot' : t('文件引用 · 不复制原文件')}
+                  </small>
+                </span>
+              </button>
+            ))}
+            {filesLoading && (
+              <div className="mention-empty" role="status">
+                {t('正在搜索文件…')}
+              </div>
+            )}
+            {fileSearchError && <div className="mention-empty">{fileSearchError}</div>}
+            {!options.length && !filesLoading && !fileSearchError && (
+              <div className="mention-empty">{t('没有匹配的 Bot 或文件')}</div>
+            )}
+          </div>
+        )}
+      </Presence>
       <div
         ref={editor}
         className="composer-editor"
@@ -829,7 +837,7 @@ export function BotComposer({
                 }
               />
             </span>
-            <PermissionModePicker scope={scope} mode={permissionMode} locked={permissionLocked} />
+            <PermissionModePicker scope={scope} mode={permissionMode} />
           </>
         )}
         {running && hasContent && (

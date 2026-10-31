@@ -12,6 +12,7 @@ import type { SettingsTab } from '../settings/SettingsWindow';
 import { Avatar } from '../ui/Avatar';
 import { time } from '../ui/format';
 import { Icon } from '../ui/Icon';
+import { Presence } from '../ui/Presence';
 import { conversationRows, type SessionRow } from './conversation-list';
 import { SidebarUpdate } from './SidebarUpdate';
 import { useI18n } from '../i18n';
@@ -46,7 +47,7 @@ export function Sidebar({
   onOpenGroup,
   onSelectBot,
   onSelectSession,
-  onSessionSettings,
+  onSessionMenu,
   onBotMenu,
   onPlugins,
   onSettings,
@@ -71,7 +72,8 @@ export function Sidebar({
   onOpenGroup: (id: string) => void;
   onSelectBot: (id: string) => void;
   onSelectSession: (session: WorkSession) => void;
-  onSessionSettings: (session: WorkSession) => void;
+  /** Opens a work session's menu: at the pointer, or below the row when `x` is absent. */
+  onSessionMenu: (session: WorkSession, trigger: HTMLButtonElement, x?: number, y?: number) => void;
   onBotMenu: (target: Bot, trigger: HTMLButtonElement, x?: number, y?: number) => void;
   onPlugins: () => void;
   onSettings: (tab?: SettingsTab) => void;
@@ -141,26 +143,28 @@ export function Sidebar({
           >
             <Icon name="plus" />
           </button>
-          {newMenu && (
-            <div className="new-conversation-menu" role="menu">
-              <button role="menuitem" onClick={onNewBot}>
-                <span className="new-bot-icon" aria-hidden="true">
-                  <Avatar bot={{ name: t('新 Bot'), ...newBotPalette }} size={20} />
-                </span>
-                {t('新建 Bot')}
-              </button>
-              <button role="menuitem" onClick={onNewGroup}>
-                <Icon name="message" size={20} />
-                {t('创建群聊')}
-              </button>
-              {onNewSession && (
-                <button role="menuitem" onClick={onNewSession}>
-                  <Icon name="folder" size={20} />
-                  {t('新建工作会话')}
+          <Presence>
+            {newMenu && (
+              <div className="new-conversation-menu" role="menu">
+                <button role="menuitem" onClick={onNewBot}>
+                  <span className="new-bot-icon" aria-hidden="true">
+                    <Avatar bot={{ name: t('新 Bot'), ...newBotPalette }} size={20} />
+                  </span>
+                  {t('新建 Bot')}
                 </button>
-              )}
-            </div>
-          )}
+                <button role="menuitem" onClick={onNewGroup}>
+                  <Icon name="message" size={20} />
+                  {t('创建群聊')}
+                </button>
+                {onNewSession && (
+                  <button role="menuitem" onClick={onNewSession}>
+                    <Icon name="folder" size={20} />
+                    {t('新建工作会话')}
+                  </button>
+                )}
+              </div>
+            )}
+          </Presence>
         </div>
       </div>
       <label className="search">
@@ -205,9 +209,11 @@ export function Sidebar({
             // The avatar shows the Bot busy wherever it works; the row's text is about its main chat.
             const busy = main.active || state.runs.some((run) => run.botId === item.id && run.status === 'running'),
               needsUser = requests.some((request) => request.botId === item.id);
-            // Archived sessions stay out of the list until searched for.
+            // Archived sessions stay out of the list until searched for, or while one is open.
             const sessions = row.sessions.filter((entry) =>
-              search ? entry.session.name.toLowerCase().includes(search) : !entry.session.archivedAt,
+              search
+                ? entry.session.name.toLowerCase().includes(search)
+                : !entry.session.archivedAt || session?.id === entry.session.id,
             );
             // A folded Bot still shows the session that is open, so the selection never hides.
             const folded = !search && collapsed.has(item.id),
@@ -227,7 +233,7 @@ export function Sidebar({
                     className={`bot-item ${page === 'chat' && !group && !session && bot?.id === item.id ? 'selected' : ''}`}
                     data-bot-id={item.id}
                     aria-haspopup="menu"
-                    aria-expanded={botMenu?.id === item.id}
+                    aria-expanded={botMenu?.id === item.id && !botMenu.sessionId}
                     onClick={() => onSelectBot(item.id)}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -282,10 +288,23 @@ export function Sidebar({
                           className={`session-item ${page === 'chat' && !group && session?.id === entry.id ? 'selected' : ''} ${entry.archivedAt ? 'is-archived' : ''}`}
                           data-session-id={entry.id}
                           title={entry.name}
+                          aria-haspopup="menu"
+                          aria-expanded={botMenu?.sessionId === entry.id}
                           onClick={() => onSelectSession(entry)}
                           onContextMenu={(event) => {
                             event.preventDefault();
-                            onSessionSettings(entry);
+                            onSessionMenu(
+                              entry,
+                              event.currentTarget,
+                              event.clientX || undefined,
+                              event.clientY || undefined,
+                            );
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                              event.preventDefault();
+                              onSessionMenu(entry, event.currentTarget);
+                            }
                           }}
                         >
                           <Icon name={entry.connector ? 'message' : 'folder'} size={14} />

@@ -1,6 +1,13 @@
 import { memo, useEffect, useId, useRef, useState } from 'react';
 import type { ChatMessage } from '../../shared/types/core';
-import { readableContent, toolDisplay, toolResult, type RunStep } from '../../shared/chat/activity';
+import {
+  readableContent,
+  runOverview,
+  toolDisplay,
+  toolResult,
+  visibleRunSteps,
+  type RunStep,
+} from '../../shared/chat/activity';
 import { stepMeta } from './tool-details-model';
 import { AttachmentList } from '../files/Attachments';
 import { Icon } from '../ui/Icon';
@@ -11,10 +18,30 @@ import { ScreenshotImage } from './ScreenshotImage';
 import { useI18n } from '../i18n';
 import { shallowEqual } from '../ui/equality';
 import { REVEAL_MESSAGE_EVENT } from './reveal-message';
+import { useCollapse } from '../ui/use-collapse';
+import { useFilePreview, type PreviewItem } from '../preview/FilePreviewContext';
 import './run-process.css';
 
-/** Steps kept visible while a run is working and the list is not expanded. */
-const LIVE_TAIL = 3;
+type RunImage = { id: string; name: string };
+/** The preview pages between items (arrows, ←/→) only when their names say they are images. */
+const imageName = (name: string) => (/\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(name) ? name : `${name}.png`);
+/** Opens a run's images in the file preview, paging through all of them from the one clicked. */
+function useOpenImages() {
+  const openPreview = useFilePreview();
+  return openPreview
+    ? (images: RunImage[], index: number) =>
+        openPreview(
+          images.map((image): PreviewItem => ({
+            id: 'screenshot:' + image.id,
+            name: imageName(image.name),
+            size: 0,
+            load: async () => ({ kind: 'image', dataUrl: await window.aelion.screenshot(image.id) }),
+          })),
+          index,
+        )
+    : undefined;
+}
+
 /** Fired by chat search so a folded run opens before the view scrolls to one of its messages. */
 
 const diffCounts = (diff: NonNullable<ChatMessage['diff']>) => ({
@@ -24,12 +51,13 @@ const diffCounts = (diff: NonNullable<ChatMessage['diff']>) => ({
 
 function toolIcon(tool = '') {
   if (/search|find_files/.test(tool)) return 'search';
-  if (/execute|terminal|process|python|code_exec/.test(tool)) return 'terminal';
+  if (/execute|exec_command|write_stdin|exec_stop|terminal|process|python|code_exec/.test(tool)) return 'terminal';
   if (/^web_|browser/.test(tool)) return 'globe';
   if (tool === 'computer' || tool === 'request_user_control') return 'computer';
   if (/^(bot_|group_|delegation)/.test(tool)) return 'message';
   if (/memory|skill/.test(tool)) return 'memory';
   if (/plan|task|goal|schedule/.test(tool)) return 'check';
+  if (/image|video_frames/.test(tool)) return 'canvas';
   return 'file';
 }
 
@@ -41,7 +69,9 @@ function ToolStep({ message }: { message: ChatMessage }) {
     status = message.status || 'done',
     running = status === 'running',
     image = message.tool === 'view_image' ? message.screenshotId : undefined,
-    meta = running ? undefined : stepMeta(toolResult(message));
+    meta = running ? undefined : stepMeta(toolResult(message)),
+    body = useCollapse(open && !running),
+    openImages = useOpenImages();
   return (
     <li
       className={`run-step run-step-tool is-${status} ${meta?.tone === 'bad' ? 'is-failed' : ''} ${toolIcon(message.tool) === 'terminal' ? 'is-command' : ''}`}
@@ -55,11 +85,20 @@ function ToolStep({ message }: { message: ChatMessage }) {
         onClick={() => setOpen(!open)}
       >
         <span className="run-step-icon">
-          <Icon name={toolIcon(message.tool)} size={13} />
+          {running ? <span className="run-step-spinner" /> : <Icon name={toolIcon(message.tool)} size={13} />}
         </span>
         <span className="run-step-label">{display.label}</span>
         {image ? (
-          <span className="run-step-image" title={display.detail}>
+          <span
+            className="run-step-image"
+            title={display.detail}
+            onClick={(event) => {
+              if (!openImages) return;
+              // The thumbnail opens the image; the rest of the row opens the step's details.
+              event.stopPropagation();
+              openImages([{ id: image, name: display.detail || t('查看图片') }], 0);
+            }}
+          >
             <ScreenshotImage id={image} alt={display.detail || t('查看图片')} />
           </span>
         ) : display.detail ? (
@@ -81,35 +120,36 @@ function ToolStep({ message }: { message: ChatMessage }) {
           className="run-step-state"
           aria-label={running ? t('进行中') : status === 'failed' ? t('失败') : undefined}
         >
-          {running ? (
-            <span className="run-step-spinner" />
-          ) : status === 'failed' ? (
-            <Icon name="alert" size={12} />
-          ) : (
-            <Icon name="chevron" size={11} />
-          )}
+          {running ? null : status === 'failed' ? <Icon name="alert" size={12} /> : <Icon name="chevron" size={11} />}
         </span>
       </button>
-      {open && !running && (
-        <div className="run-step-body" id={bodyId}>
-          <ToolDetails message={message} />
+      {body.mounted && (
+        <div className="ui-collapse" data-closing={body.closing || undefined}>
+          <div>
+            <div className="run-step-body" id={bodyId}>
+              <ToolDetails message={message} />
+            </div>
+          </div>
         </div>
       )}
     </li>
   );
 }
 
-function NoteStep({ message }: { message: ChatMessage }) {
+/** Text the run said between tools. It never carries the avatar: the working status below, and later the answer, do. */
+function NoteBubble({ message }: { message: ChatMessage }) {
   const content = readableContent(message.content);
   return (
-    <li className="run-step run-step-note" data-message-id={message.id}>
-      {content && (
-        <div className="markdown">
-          <MentionContent content={content} mentions={message.mentions} markdown />
-        </div>
-      )}
-      <AttachmentList files={message.attachments} />
-    </li>
+    <div className="run-note" data-message-id={message.id}>
+      <div className="bubble run-note-bubble">
+        {content && (
+          <div className="markdown">
+            <MentionContent content={content} mentions={message.mentions} markdown />
+          </div>
+        )}
+        <AttachmentList files={message.attachments} />
+      </div>
+    </div>
   );
 }
 
@@ -120,26 +160,67 @@ const durationLabel = (t: ReturnType<typeof useI18n>['t'], ms: number) => {
     : t('{seconds} 秒', { seconds });
 };
 
+/** The icon for each kind of work runOverview names (shared/chat/activity.ts). */
+const KIND_ICONS: Record<string, string> = {
+  read: 'file',
+  image: 'canvas',
+  edit: 'edit',
+  write: 'plus',
+  command: 'terminal',
+  web: 'globe',
+  search: 'search',
+  computer: 'computer',
+  generate: 'sparkle',
+  message: 'message',
+  mcp: 'plugin',
+  plan: 'check',
+  skill: 'book',
+  memory: 'memory',
+  other: 'more',
+};
+
+/** Time since the run started, ticking once a second while it works. */
+function useElapsed(startedAt?: string) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+  const started = startedAt ? Date.parse(startedAt) : NaN;
+  return Number.isFinite(started) ? Math.max(0, now - started) : undefined;
+}
+
 /**
- * Everything a run did before its answer, folded into one line once the run ends. While the run works the newest
- * steps stay visible so progress is readable without the history growing without bound.
+ * Everything a run did before its answer, folded into one capsule: its state and time, the kinds of work it did as
+ * icons with counts, and the lines it changed, with the images it read stacked beside it. While the run works only
+ * its text stays out under the capsule; the steps open on request, and fold again when the answer arrives.
  */
-type RunProcessProps = { steps: RunStep[]; running: boolean; durationMs?: number };
+type RunProcessProps = {
+  steps: RunStep[];
+  running: boolean;
+  startedAt?: string;
+  durationMs?: number;
+};
 export const RunProcess = memo(
   RunProcessView,
   (a: RunProcessProps, b: RunProcessProps) =>
     a.running === b.running &&
+    a.startedAt === b.startedAt &&
     a.durationMs === b.durationMs &&
     a.steps.length === b.steps.length &&
     a.steps.every((step, index) => shallowEqual(step, b.steps[index])),
 );
-function RunProcessView({ steps: allSteps, running, durationMs }: RunProcessProps) {
+function RunProcessView({ steps: allSteps, running, startedAt, durationMs }: RunProcessProps) {
   const { t } = useI18n();
   const reasoning = useReasoningDisplay(),
     steps = reasoning === 'hidden' ? allSteps.filter((step) => step.kind !== 'reasoning') : allSteps;
   const [expanded, setExpanded] = useState(false);
   const listId = useId(),
-    wasRunning = useRef(running);
+    wasRunning = useRef(running),
+    elapsed = useElapsed(running ? startedAt : undefined),
+    sheet = useCollapse(expanded),
+    openImages = useOpenImages();
   // The answer takes over once the run ends: fold the process even if it was opened while working.
   useEffect(() => {
     if (wasRunning.current && !running) setExpanded(false);
@@ -155,50 +236,116 @@ function RunProcessView({ steps: allSteps, running, durationMs }: RunProcessProp
     return () => window.removeEventListener(REVEAL_MESSAGE_EVENT, reveal);
   }, [ids]);
   if (!steps.length) return null;
-  const visible = expanded ? steps : running ? steps.slice(-LIVE_TAIL) : [],
-    hidden = steps.length - visible.length;
-  const summary = running
-    ? t('正在处理 · {count} 个步骤', { count: steps.length })
-    : durationMs !== undefined
-      ? t('已处理 {duration} · {count} 个步骤', { duration: durationLabel(t, durationMs), count: steps.length })
-      : t('处理过程 · {count} 个步骤', { count: steps.length });
+  // Folded, a working run keeps only what it said; every tool and thought goes into the capsule. Opened, every step
+  // sits on the sheet, which stays mounted while it animates shut.
+  const notes = running && !expanded ? visibleRunSteps(steps, { running, expanded: false, stepLimit: 0 }).steps : [];
+  const renderStep = (step: RunStep) =>
+    step.kind === 'tool' ? (
+      <ToolStep key={step.id} message={step.message} />
+    ) : step.kind === 'note' ? (
+      <li key={step.id} className="run-step run-step-note">
+        <NoteBubble message={step.message} />
+      </li>
+    ) : (
+      <li key={step.id} className="run-step run-step-reasoning" data-message-id={step.message.id}>
+        <MessageReasoning reasoning={step.message.reasoning} />
+      </li>
+    );
+  const overview = runOverview(steps),
+    time = running ? elapsed : durationMs;
+  const status = running
+    ? time !== undefined
+      ? t('处理中 · {duration}', { duration: durationLabel(t, time) })
+      : t('处理中')
+    : time !== undefined
+      ? t('已处理 {duration}', { duration: durationLabel(t, time) })
+      : t('处理过程');
+  const kinds = overview.parts.length ? overview.parts.map((part) => part.text).join(t('，')) : '';
+  const changed = overview.added > 0 || overview.removed > 0;
+  const thumbnails = overview.images.slice(-3),
+    moreImages = overview.images.length - thumbnails.length;
+  // Each thumbnail opens the gallery at itself; the count opens it at the first image.
+  const showImage = (index: number) => (openImages ? openImages(overview.images, index) : setExpanded(true));
   return (
     <div className={`run-process ${running ? 'is-running' : ''} ${expanded ? 'is-expanded' : ''}`}>
-      <button
-        type="button"
-        className="run-process-toggle"
-        aria-expanded={expanded}
-        aria-controls={visible.length ? listId : undefined}
-        aria-label={`${summary} · ${t(expanded ? '收起处理过程' : '展开处理过程')}`}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span className="run-process-mark">
-          {running ? <span className="run-step-spinner" /> : <Icon name="layers" size={13} />}
-        </span>
-        <span className="run-process-summary">{summary}</span>
-        <Icon name="chevron" size={12} />
-      </button>
-      {visible.length > 0 && (
-        <ol className="run-process-steps" id={listId}>
-          {hidden > 0 && (
-            <li className="run-step run-step-more">
-              <button type="button" onClick={() => setExpanded(true)}>
-                {t('还有 {count} 个较早的步骤', { count: hidden })}
-              </button>
-            </li>
-          )}
-          {visible.map((step) =>
-            step.kind === 'tool' ? (
-              <ToolStep key={step.id} message={step.message} />
-            ) : step.kind === 'note' ? (
-              <NoteStep key={step.id} message={step.message} />
+      <div className="run-process-line">
+        <button
+          type="button"
+          className="run-process-toggle"
+          aria-expanded={expanded}
+          aria-controls={expanded ? listId : undefined}
+          aria-label={[status, kinds, t(expanded ? '收起处理过程' : '展开处理过程')].filter(Boolean).join(' · ')}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="run-process-status">
+            {running ? (
+              <span className="run-process-spinner" />
             ) : (
-              <li key={step.id} className="run-step run-step-reasoning" data-message-id={step.message.id}>
-                <MessageReasoning reasoning={step.message.reasoning} />
-              </li>
-            ),
+              <span className="run-process-done">
+                <Icon name="check" size={10} />
+              </span>
+            )}
+            <span className="run-process-status-text">{status}</span>
+          </span>
+          {overview.parts.length > 0 ? (
+            <span className="run-process-kinds">
+              {overview.parts.map((part) => (
+                <span key={part.kind} className="run-process-kind" title={part.text}>
+                  <Icon name={KIND_ICONS[part.kind] || 'more'} size={13} />
+                  <b>{part.count}</b>
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className="run-process-kinds">{t('{count} 个步骤', { count: steps.length })}</span>
           )}
-        </ol>
+          {changed && (
+            <span
+              className="run-process-diff"
+              title={t('新增 {added} 行，删除 {removed} 行', { added: overview.added, removed: overview.removed })}
+            >
+              <span className="is-added">+{overview.added}</span>
+              <span className="is-removed">−{overview.removed}</span>
+            </span>
+          )}
+          <Icon name="chevron" size={12} />
+        </button>
+        {thumbnails.length > 0 && (
+          <span className="run-process-images">
+            {thumbnails.map((image, index) => (
+              <button
+                key={image.id}
+                type="button"
+                className="run-process-thumb"
+                title={image.name}
+                aria-label={t('查看图片 {name}', { name: image.name })}
+                onClick={() => showImage(moreImages + index)}
+              >
+                <ScreenshotImage id={image.id} alt="" />
+              </button>
+            ))}
+            {moreImages > 0 && (
+              <button
+                type="button"
+                className="run-process-more-images"
+                aria-label={t('查看全部 {count} 张图片', { count: overview.images.length })}
+                onClick={() => showImage(0)}
+              >
+                +{moreImages}
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+      {notes.length > 0 && <ol className="run-transcript">{notes.map(renderStep)}</ol>}
+      {sheet.mounted && (
+        <div className="ui-collapse" data-closing={sheet.closing || undefined}>
+          <div>
+            <ol className="run-process-steps" id={listId}>
+              {steps.map(renderStep)}
+            </ol>
+          </div>
+        </div>
       )}
     </div>
   );

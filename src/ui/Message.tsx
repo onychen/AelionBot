@@ -2,7 +2,6 @@ import { createContext, memo, useContext, useRef } from 'react';
 import { previewFeedbackDisplay } from '../../shared/preview/preview-feedback';
 import { MessageQuote } from '../chat/MessageQuote';
 import { MessageTime } from '../chat/ConversationTime';
-import { clockTime } from '../chat/conversation-time';
 import { AttachmentList } from '../files/Attachments';
 import { attachmentSummary } from '../../shared/types/attachment-types';
 import type { Bot, ChatMessage } from '../../shared/types/core';
@@ -29,38 +28,46 @@ type MessageProps = {
   blocks?: MessageBlock[];
   allowPins?: boolean;
   onReply?: (message: ChatMessage) => void;
+  /** Takes the message back to edit it; given only while it is still waiting or being worked on. */
+  onEdit?: (message: ChatMessage) => void;
   /** False when the reasoning is already shown elsewhere, e.g. inside the folded run process. */
   showReasoning?: boolean;
 };
 // A message re-renders only when it changed: an unchanged one is the same object (see shared/state-sync.ts).
-// onReply is compared by presence and read through a ref, so a skipped render still calls the latest callback.
+// onReply and onEdit are compared by presence and read through refs, so a skipped render still calls the latest one.
 const MemoMessage = memo(
   MessageView,
-  (a: MessageProps & { reply: ReplyRef }, b: MessageProps & { reply: ReplyRef }) =>
+  (a: MessageProps & Refs, b: MessageProps & Refs) =>
     a.allowPins === b.allowPins &&
     a.showReasoning === b.showReasoning &&
     Boolean(a.onReply) === Boolean(b.onReply) &&
+    Boolean(a.onEdit) === Boolean(b.onEdit) &&
     sameItems(a.blocks, b.blocks) &&
     shallowEqual(a.message, b.message),
 );
 type ReplyRef = { current?: (message: ChatMessage) => void };
+type Refs = { reply: ReplyRef; edit: ReplyRef };
 /** The Bot whose avatar stands beside its messages; the styles show it on the last message of a run of them. */
 export const MessageAvatarContext = createContext<Pick<Bot, 'id' | 'name' | 'color' | 'avatarStyle'> | undefined>(
   undefined,
 );
 export function Message(props: MessageProps) {
-  const reply = useRef<(message: ChatMessage) => void>(undefined);
+  const reply = useRef<(message: ChatMessage) => void>(undefined),
+    edit = useRef<(message: ChatMessage) => void>(undefined);
   reply.current = props.onReply;
-  return <MemoMessage {...props} reply={reply} />;
+  edit.current = props.onEdit;
+  return <MemoMessage {...props} reply={reply} edit={edit} />;
 }
 function MessageView({
   message,
   blocks,
   allowPins = true,
   onReply: hasReply,
+  onEdit: hasEdit,
   showReasoning = true,
   reply,
-}: MessageProps & { reply: ReplyRef }) {
+  edit,
+}: MessageProps & Refs) {
   const onReply = hasReply ? (value: ChatMessage) => reply.current?.(value) : undefined;
   const { t } = useI18n();
   const avatar = useContext(MessageAvatarContext);
@@ -116,9 +123,7 @@ function MessageView({
   const images = (message.attachments || []).filter((file) => file.image || file.mime.startsWith('image/')),
     // Images sit above the bubble and other files below it. A message that is only attachments puts them in a
     // see-through bubble so hover actions (reply, pin) still have a target.
-    bare = Boolean(message.attachments?.length) && !displayContent && !answer && !message.reply && !hasBlocks,
-    clock =
-      bare || message.status === 'running' || !(displayContent || answer || hasBlocks) ? '' : clockTime(message.time);
+    bare = Boolean(message.attachments?.length) && !displayContent && !answer && !message.reply && !hasBlocks;
   return (
     <>
       <MessageTime id={message.id} time={message.time} />
@@ -146,7 +151,8 @@ function MessageView({
               ? () => onReply({ ...message, content: displayContent })
               : undefined
           }
-          bubbleClassName={`bubble ${answer ? 'question-answer-bubble' : ''} ${message.status === 'failed' ? 'failed' : ''} ${bare ? 'is-media' : ''} ${clock ? 'has-time' : ''}`}
+          onEdit={hasEdit ? () => edit.current?.(message) : undefined}
+          bubbleClassName={`bubble ${answer ? 'question-answer-bubble' : ''} ${message.status === 'failed' ? 'failed' : ''} ${bare ? 'is-media' : ''}`}
           after={bare ? undefined : <AttachmentList files={message.attachments} only="files" />}
           onPin={
             allowPins &&
@@ -174,11 +180,7 @@ function MessageView({
                 </>
               )
             ) : (
-              <>
-                <MentionContent content={displayContent} mentions={presentation.mentions} />
-                {/* Keeps the last line of text clear of the time in the bubble's corner. */}
-                {clock && <span className="bubble-time-gap" aria-hidden="true" />}
-              </>
+              <MentionContent content={displayContent} mentions={presentation.mentions} />
             )
           ) : message.attachments?.length ? null : (
             <span className="typing">
@@ -188,11 +190,6 @@ function MessageView({
             </span>
           )}
           {bare && <AttachmentList files={message.attachments} />}
-          {clock && (
-            <time className="bubble-time" dateTime={message.time}>
-              {clock}
-            </time>
-          )}
         </MessageActions>
       </div>
     </>

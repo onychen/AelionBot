@@ -48,6 +48,8 @@ const PEERS =
 const GROUPS =
   '\nCreate groups or invite Bots when needed for the user task, verifying identities with bots_list. Group messages are stored in a separate conversation. Each new message notifies other members, but reply only when necessary, explicitly asked, or assigned work. Do not reply merely for politeness, agreement, or acknowledgement, and do not repeatedly prompt one another.';
 const CHAT_PIN = '\nUse chat_pin to react with emoji instead of repetitive textual acknowledgements.';
+const MESSAGE_BLOCKS =
+  '\nmessage_block renders data inside your reply as a chart, metric row, table, timeline, callout or interactive calculator. Use it whenever you judge the reader would grasp the data faster than from prose or a Markdown table; for example, a chart for a trend or comparison, or a calculator the user can rerun with their own figures such as salary, rates or loan terms. It is never required. Write the conclusion in prose and use blocks as supporting evidence.';
 const HISTORY =
   '\nUse history_search/history_read to revisit stored history. Summaries are not complete originals; read the source when exact details matter.';
 const PLANNING =
@@ -86,6 +88,8 @@ export interface HarnessPromptOptions {
   peers: boolean;
   groups: boolean;
   chatPin: boolean;
+  /** message_block is offered. */
+  messageBlocks?: boolean;
   history: boolean;
   /** False when web_read is not offered. */
   web?: boolean;
@@ -129,6 +133,7 @@ export function harnessInstructions(options: HarnessPromptOptions) {
   if (options.peers) text += PEERS;
   if (options.groups) text += GROUPS;
   if (options.chatPin) text += CHAT_PIN;
+  if (options.messageBlocks) text += MESSAGE_BLOCKS;
   if (options.history) text += HISTORY;
   text += PLANNING;
   if (options.preview) text += openPreview(vm);

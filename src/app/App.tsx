@@ -1,4 +1,5 @@
 import './conversation-chrome.css';
+import './glass-shell.css';
 // Import order below decides the order of the bundled stylesheets (the cascade), so keep it when editing.
 import { usePreviewWorkbench } from '../preview/PreviewWorkbench';
 import { useAgentPreview } from '../preview/use-agent-preview';
@@ -17,7 +18,7 @@ import { BotProfileForm } from './BotProfileForm';
 import { ConversationPane } from './ConversationPane';
 import { Sidebar } from './Sidebar';
 import { computerSetupDismissalKey } from '../computer/computer-setup-state';
-import { BotContextMenu, type BotMenuAnchor } from '../bots/BotContextMenu';
+import { BotContextMenu, SessionContextMenu, type BotMenuAnchor } from '../bots/BotContextMenu';
 import { InteractionNotifications } from '../chat/InteractionPrompts';
 import { PeerNotifications, PrivateChatWindow, type PeerPanel } from '../group/PeerChats';
 import { GroupEditor } from '../group/GroupEditor';
@@ -41,6 +42,8 @@ import { useToast } from './use-toast';
 import { StreamsProvider, useStreamOwners } from './streams';
 import { useShared } from '../ui/use-shared';
 import { WorkSessionEditor } from './WorkSessionEditor';
+import { ArchivedSessions } from './ArchivedSessions';
+import { Presence } from '../ui/Presence';
 
 export default function App() {
   return (
@@ -76,11 +79,19 @@ function AppContent() {
     [newMenu, setNewMenu] = useState(false);
   // The open work session of the selected Bot ('' for its main chat), and the session dialog when open.
   const [selectedSession, setSelectedSession] = useState(''),
-    [sessionEditor, setSessionEditor] = useState<{ botId: string; sessionId?: string; choose?: boolean }>();
+    [sessionEditor, setSessionEditor] = useState<{
+      botId: string;
+      sessionId?: string;
+      choose?: boolean;
+      /** Opened from the menu's delete: only the confirmation. */
+      deleting?: boolean;
+    }>();
   const group = state?.groups?.rooms.find((room) => room.id === selectedGroup);
   const [modal, setModal] = useState<Modal>(null),
     [settingsTab, setSettingsTab] = useState<SettingsTab>('model'),
     [scope, setScope] = useState('');
+  /** The Bot whose archived work sessions are listed. */
+  const [archivedOf, setArchivedOf] = useState('');
   const [botMenu, setBotMenu] = useState<BotMenuAnchor>(),
     [deletingId, setDeletingId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -104,6 +115,9 @@ function AppContent() {
   }, [page, bot?.id, group?.id, previewWorkbench?.activate]);
   const sessionBots = state?.bots || [];
   const menuBot = state?.bots.find((item) => item.id === botMenu?.id),
+    menuSession = botMenu?.sessionId
+      ? state?.workSessions?.find((item) => item.id === botMenu.sessionId && item.botId === botMenu.id)
+      : undefined,
     deletingBot = state?.bots.find((item) => item.id === deletingId);
   // Derived from the parts of the state it reads, so a change elsewhere (the work computer, a setting) keeps it.
   const conversation = useMemo(
@@ -294,6 +308,17 @@ function AppContent() {
     const box = trigger.getBoundingClientRect();
     setBotMenu({ id: target.id, trigger, x: x ?? box.left + 24, y: y ?? box.bottom });
   };
+  const showSessionMenu = (target: WorkSession, trigger: HTMLButtonElement, x?: number, y?: number) => {
+    const box = trigger.getBoundingClientRect();
+    setBotMenu({ id: target.botId, sessionId: target.id, trigger, x: x ?? box.left + 24, y: y ?? box.bottom });
+  };
+  /** A new work session from the main chat or a work session, opened once it exists. */
+  const forkChat = (botId: string, sessionId?: string) => {
+    setBotMenu(undefined);
+    void act(async () =>
+      openSession(await window.aelion.forkWorkSession({ botId, ...(sessionId ? { sessionId } : {}) })),
+    );
+  };
   const saveProfile = async () => {
     await profile.save({ creating: modal === 'new', onCreated: setSelected });
     setModal(null);
@@ -324,6 +349,11 @@ function AppContent() {
     >
       <BotAvatarProvider bots={state.bots}>
         <div className="app-shell" data-platform={state.platform} data-page={page}>
+          <div
+            className="window-drag-strip"
+            aria-hidden="true"
+            onDoubleClick={() => window.aelion.toggleWindowZoom()}
+          />
           <Sidebar
             state={state}
             page={page}
@@ -368,7 +398,7 @@ function AppContent() {
               setSelected(id);
             }}
             onSelectSession={openSession}
-            onSessionSettings={(item) => setSessionEditor({ botId: item.botId, sessionId: item.id })}
+            onSessionMenu={showSessionMenu}
             onBotMenu={showBotMenu}
             onPlugins={() => openPlugins()}
             onSettings={openSettings}
@@ -438,138 +468,202 @@ function AppContent() {
             onError={setToast}
             onTaskModalChange={setTaskModalOpen}
           />
-          {toast && (
-            <div className="toast" role="status">
-              {toast}
-            </div>
-          )}
+          <Presence>
+            {toast && (
+              <div className="toast" role="status">
+                {toast}
+              </div>
+            )}
+          </Presence>
           <InteractionNotifications requests={requests} bots={state.bots} onView={viewInteraction} />
           <GroupNotifications
             view={state.groups}
             selected={page === 'chat' && !modal && !peerPanel && !taskModalOpen ? group?.id : undefined}
             onView={openGroup}
           />
-          {groupEditor && (
-            <GroupEditor
-              laya={state.layaFeature}
-              key={groupEditor}
-              bots={state.bots}
-              group={state.groups?.rooms.find((room) => room.id === groupEditor)}
-              workspace={
-                groupEditor
-                  ? {
-                      dir:
-                        state.conversationWorkspaces?.[workspaceKey({ kind: 'group', id: groupEditor })] ||
-                        state.hostWorkspace?.workspaceDir,
-                      inherited: !state.conversationWorkspaces?.[workspaceKey({ kind: 'group', id: groupEditor })],
-                    }
-                  : undefined
-              }
-              onClose={() => setGroupEditor(undefined)}
-              onSaved={(id) => {
-                setGroupEditor(undefined);
-                setSelectedGroup(id);
-              }}
-              onDeleted={(id) => {
-                setGroupEditor(undefined);
-                if (selectedGroup === id) setSelectedGroup('');
-                groupDrafts.remove(id);
-              }}
-            />
-          )}
-          {sessionEditor && state.bots.some((item) => item.id === sessionEditor.botId) && (
-            <WorkSessionEditor
-              key={sessionEditor.sessionId || 'new:' + sessionEditor.botId}
-              bot={state.bots.find((item) => item.id === sessionEditor.botId)!}
-              bots={sessionEditor.choose ? sessionBots : undefined}
-              session={state.workSessions?.find((item) => item.id === sessionEditor.sessionId)}
-              workspaceDir={
-                sessionEditor.sessionId
-                  ? state.conversationWorkspaces?.['session:' + sessionEditor.sessionId]
-                  : undefined
-              }
-              onClose={() => setSessionEditor(undefined)}
-              onCreated={(item) => {
-                setSessionEditor(undefined);
-                openSession(item);
-              }}
-              onDeleted={(item) => {
-                setSessionEditor(undefined);
-                drafts.remove('session:' + item.id);
-                if (selectedSession === item.id) setSelectedSession('');
-              }}
-            />
-          )}
+          <Presence>
+            {groupEditor && (
+              <GroupEditor
+                laya={state.layaFeature}
+                key={groupEditor}
+                bots={state.bots}
+                group={state.groups?.rooms.find((room) => room.id === groupEditor)}
+                workspace={
+                  groupEditor
+                    ? {
+                        dir:
+                          state.conversationWorkspaces?.[workspaceKey({ kind: 'group', id: groupEditor })] ||
+                          state.hostWorkspace?.workspaceDir,
+                        inherited: !state.conversationWorkspaces?.[workspaceKey({ kind: 'group', id: groupEditor })],
+                      }
+                    : undefined
+                }
+                onClose={() => setGroupEditor(undefined)}
+                onSaved={(id) => {
+                  setGroupEditor(undefined);
+                  setSelectedGroup(id);
+                }}
+                onDeleted={(id) => {
+                  setGroupEditor(undefined);
+                  if (selectedGroup === id) setSelectedGroup('');
+                  groupDrafts.remove(id);
+                }}
+              />
+            )}
+          </Presence>
+          <Presence>
+            {sessionEditor && state.bots.some((item) => item.id === sessionEditor.botId) && (
+              <WorkSessionEditor
+                key={
+                  (sessionEditor.sessionId || 'new:' + sessionEditor.botId) + (sessionEditor.deleting ? ':delete' : '')
+                }
+                bot={state.bots.find((item) => item.id === sessionEditor.botId)!}
+                bots={sessionEditor.choose ? sessionBots : undefined}
+                session={state.workSessions?.find((item) => item.id === sessionEditor.sessionId)}
+                deleting={sessionEditor.deleting}
+                workspaceDir={
+                  sessionEditor.sessionId
+                    ? state.conversationWorkspaces?.['session:' + sessionEditor.sessionId]
+                    : undefined
+                }
+                onClose={() => setSessionEditor(undefined)}
+                onCreated={(item) => {
+                  setSessionEditor(undefined);
+                  openSession(item);
+                }}
+                onDeleted={(item) => {
+                  setSessionEditor(undefined);
+                  drafts.remove('session:' + item.id);
+                  if (selectedSession === item.id) setSelectedSession('');
+                }}
+              />
+            )}
+          </Presence>
+          <Presence>
+            {archivedOf && state.bots.some((item) => item.id === archivedOf) && (
+              <ArchivedSessions
+                bot={state.bots.find((item) => item.id === archivedOf)!}
+                sessions={(state.workSessions || []).filter((item) => item.botId === archivedOf && item.archivedAt)}
+                busy={busy}
+                onOpen={(item) => {
+                  setArchivedOf('');
+                  openSession(item);
+                }}
+                onRestore={(item) => void act(() => window.aelion.updateWorkSession({ id: item.id, archived: false }))}
+                onClose={() => setArchivedOf('')}
+              />
+            )}
+          </Presence>
           <PeerNotifications view={state.peers} bots={state.bots} onView={openPrivateChat} />
-          {peerPanel && (
-            <PrivateChatWindow
-              designer={state.designer}
-              panel={peerPanel}
-              view={state.peers}
-              bots={state.bots}
-              avatarActivities={avatarActivities}
-              runs={state.runs}
-              messages={state.messages}
-              onNavigate={setPeerPanel}
-              onClose={() => setPeerPanel(undefined)}
-            />
-          )}
-          {botMenu && menuBot && (
-            <BotContextMenu
-              anchor={botMenu}
-              name={menuBot.name}
-              canDelete={!state.runs.some((run) => run.botId === menuBot.id && run.status === 'running')}
-              onEdit={() => editBot(menuBot)}
-              onDelete={() => {
-                setDeletingId(menuBot.id);
-                setBotMenu(undefined);
-                setModal('delete-bot');
-              }}
-              onPrivateChats={() => openPrivateChat({ ownerId: menuBot.id })}
-              onNewSession={() => {
-                setBotMenu(undefined);
-                setSessionEditor({ botId: menuBot.id });
-              }}
-              onClose={() => setBotMenu(undefined)}
-            />
-          )}
-          {modal && (
-            <AppModals
-              modal={modal}
-              setModal={setModal}
-              closeModal={closeModal}
-              act={act}
-              busy={busy}
-              state={state}
-              bot={bot}
-              computer={computer}
-              profileForm={
-                (modal === 'new' || modal === 'profile') && (
-                  <BotProfileForm
-                    modal={modal}
-                    state={state}
-                    profile={profile}
-                    busy={busy}
-                    onSave={() => void act(() => saveProfile())}
-                  />
-                )
-              }
-              deletingBot={deletingBot}
-              removeBot={removeBot}
-              settingsTab={settingsTab}
-              setSettingsTab={setSettingsTab}
-              scope={scope}
-              setScope={setScope}
-              appearance={appearance}
-              command={command}
-              setCommand={setCommand}
-              output={output}
-              setOutput={setOutput}
-              screen={screen}
-              openPreview={files.openPreview}
-              setToast={setToast}
-            />
-          )}
+          <Presence>
+            {peerPanel && (
+              <PrivateChatWindow
+                designer={state.designer}
+                panel={peerPanel}
+                view={state.peers}
+                bots={state.bots}
+                avatarActivities={avatarActivities}
+                runs={state.runs}
+                messages={state.messages}
+                onNavigate={setPeerPanel}
+                onClose={() => setPeerPanel(undefined)}
+              />
+            )}
+          </Presence>
+          <Presence>
+            {botMenu && menuBot && menuSession && (
+              <SessionContextMenu
+                anchor={botMenu}
+                name={menuSession.name}
+                archived={Boolean(menuSession.archivedAt)}
+                onEdit={() => {
+                  setBotMenu(undefined);
+                  setSessionEditor({ botId: menuSession.botId, sessionId: menuSession.id });
+                }}
+                onFork={() => forkChat(menuSession.botId, menuSession.id)}
+                onArchive={() => {
+                  setBotMenu(undefined);
+                  void act(() =>
+                    window.aelion.updateWorkSession({ id: menuSession.id, archived: !menuSession.archivedAt }),
+                  );
+                }}
+                onDelete={() => {
+                  setBotMenu(undefined);
+                  setSessionEditor({ botId: menuSession.botId, sessionId: menuSession.id, deleting: true });
+                }}
+                onClose={() => setBotMenu(undefined)}
+              />
+            )}
+          </Presence>
+          <Presence>
+            {botMenu && menuBot && !botMenu.sessionId && (
+              <BotContextMenu
+                anchor={botMenu}
+                name={menuBot.name}
+                canDelete={!state.runs.some((run) => run.botId === menuBot.id && run.status === 'running')}
+                onEdit={() => editBot(menuBot)}
+                onDelete={() => {
+                  setDeletingId(menuBot.id);
+                  setBotMenu(undefined);
+                  setModal('delete-bot');
+                }}
+                onPrivateChats={() => openPrivateChat({ ownerId: menuBot.id })}
+                onNewSession={() => {
+                  setBotMenu(undefined);
+                  setSessionEditor({ botId: menuBot.id });
+                }}
+                onFork={() => forkChat(menuBot.id)}
+                onArchived={
+                  state.workSessions?.some((item) => item.botId === menuBot.id && item.archivedAt)
+                    ? () => {
+                        setBotMenu(undefined);
+                        setArchivedOf(menuBot.id);
+                      }
+                    : undefined
+                }
+                onClose={() => setBotMenu(undefined)}
+              />
+            )}
+          </Presence>
+          <Presence>
+            {modal && (
+              <AppModals
+                modal={modal}
+                setModal={setModal}
+                closeModal={closeModal}
+                act={act}
+                busy={busy}
+                state={state}
+                bot={bot}
+                computer={computer}
+                profileForm={
+                  (modal === 'new' || modal === 'profile') && (
+                    <BotProfileForm
+                      modal={modal}
+                      state={state}
+                      profile={profile}
+                      busy={busy}
+                      onSave={() => void act(() => saveProfile())}
+                    />
+                  )
+                }
+                deletingBot={deletingBot}
+                removeBot={removeBot}
+                settingsTab={settingsTab}
+                setSettingsTab={setSettingsTab}
+                scope={scope}
+                setScope={setScope}
+                appearance={appearance}
+                command={command}
+                setCommand={setCommand}
+                output={output}
+                setOutput={setOutput}
+                screen={screen}
+                openPreview={files.openPreview}
+                setToast={setToast}
+              />
+            )}
+          </Presence>
         </div>
       </BotAvatarProvider>
     </PreviewScopeProvider>

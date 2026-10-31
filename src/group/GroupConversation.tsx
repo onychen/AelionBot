@@ -2,6 +2,7 @@ import { GroupDecisionTrail } from './GroupDecisionTrail';
 import { isEmptyGroupReply } from '../../shared/chat/group-empty-reply';
 import { unanswered } from '../../shared/chat/group-answers';
 import { GroupGames } from './GroupGames';
+import { GameGlyph } from './GameGlyph';
 import { cardIndex } from './game-view-model';
 import { DesignerTaskCard } from '../designer/DesignerTaskCard';
 import { activeDesignId } from '../designer/design-canvas-state';
@@ -25,6 +26,7 @@ import type { PinInput } from '../../shared/chat/reactions';
 import { share } from '../../shared/state-sync';
 import { Avatar } from '../ui/Avatar';
 import { Icon } from '../ui/Icon';
+import { Presence } from '../ui/Presence';
 import { MentionContent } from '../ui/MentionContent';
 import { PinThreadContext, usePinRefs, usePinThread } from '../preview/pin-thread';
 import type { FileItem } from '../ui/FileCard';
@@ -383,7 +385,9 @@ export function GroupConversation({
           <ComputerCardToggle />
         </div>
       </header>
-      {personaPanel && <GroupPersonaPanel members={members} onClose={() => setPersonaPanel(false)} />}
+      <Presence>
+        {personaPanel && <GroupPersonaPanel members={members} onClose={() => setPersonaPanel(false)} />}
+      </Presence>
       <div className="group-design-tasks">
         {state.designer?.sessions
           .filter(
@@ -644,6 +648,7 @@ const GroupMessageRow = memo(function GroupMessageRow({
             runIds={[...(runId ? [runId] : []), ...(message.runIds || [])]}
             artifactNames={new Set(files.map((file) => file.path))}
             attachmentIds={new Set(message.attachments?.map((attachment) => attachment.id) || [])}
+            hideDesignCanvas={Boolean(message.designSessionId)}
             onOpen={actions.openPreviewEntry}
           />
           <ArtifactList files={files} onOpen={actions.openFile} onSave={actions.saveFile} disabled={!vmReady} />
@@ -661,11 +666,14 @@ function GameResultCard({ content, onOpen }: { content: string; onOpen?: () => v
   const { t } = useI18n();
   const [first = '', ...rest] = content.split('\n');
   const match = /^(.+?)战报：(.+?)。?$/.exec(first);
+  // Party and card games have their own mark; Werewolf shows the night when the wolves won.
+  const mark = ({ 谁是卧底: 'undercover', 斗地主: 'cards', 麻将: 'tile' } as Record<string, string>)[match?.[1] || ''],
+    lost = /狼人获胜|卧底获胜|白板获胜/.test(first);
   return (
     <details className="gg-result-card">
       <summary>
-        <span className="gg-moon is-day" aria-hidden="true">
-          ☀
+        <span className={`gg-mark ${mark ? 'is-party' : lost ? 'is-night' : 'is-day'}`}>
+          <GameGlyph name={mark || (lost ? 'moon' : 'sun')} size={17} />
         </span>
         <span className="gg-result-title">
           <strong>{match ? t('{game} · 战报', { game: t(match[1]) }) : t('对局战报')}</strong>
@@ -680,10 +688,11 @@ function GameResultCard({ content, onOpen }: { content: string; onOpen?: () => v
               onOpen();
             }}
           >
-            {t('查看对局')} ↗
+            {t('查看对局')}
+            <GameGlyph name="arrow" size={13} />
           </button>
         )}
-        <span className="gg-result-more">{t('详情')}</span>
+        {rest.length > 0 && <span className="gg-chevron" aria-label={t('详情')} />}
       </summary>
       {rest.length > 0 && <p>{rest.join('\n')}</p>}
     </details>

@@ -12,10 +12,11 @@ export function useWindowDimming() {
     let previous = '',
       frame = 0;
     const sync = () => {
-      const dimmed = Boolean(document.querySelector('[aria-modal="true"]'));
+      // A dialog animating out (Presence) no longer counts; its backdrop already fades.
+      const dimmed = Boolean(document.querySelector('[aria-modal="true"]:not([data-leaving] *)'));
       let color = [247, 247, 247];
-      // Native caption buttons paint outside the DOM. Match the actual backdrop
-      // at their location, including different modal opacities and nested layers.
+      // Native caption buttons sit on a transparent overlay. Sample the backdrop at
+      // their location (modal opacities, nested layers) so their symbols stay legible.
       for (const element of document.elementsFromPoint(Math.max(0, window.innerWidth - 80), 18).reverse()) {
         const style = getComputedStyle(element),
           rgba = style.backgroundColor
@@ -59,7 +60,7 @@ export function useWindowDimming() {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ['aria-modal', 'class', 'style'],
+      attributeFilter: ['aria-modal', 'class', 'style', 'data-leaving'],
     });
     window.addEventListener('resize', schedule);
     window.addEventListener('aelion-appearance-change', schedule);
